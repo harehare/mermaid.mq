@@ -271,7 +271,7 @@ def _mm_edge_line(eg, nd_list):
       "  " + fs + " --> " + ts
 end
 
-def _mm_flowchart_to_string(d):
+def _mm_flowchart_stringify(d):
   let nd_list  = d["nodes"]
   | let eg_list  = d["edges"]
   | let diag_dir = d["direction"]
@@ -283,7 +283,7 @@ def _mm_flowchart_to_string(d):
   | join(lines, "\n")
 end
 
-def _mm_sequence_to_string(d):
+def _mm_sequence_stringify(d):
   let parts   = d["participants"]
   | let msgs  = d["messages"]
   | let p_lines = map(parts, fn(p):
@@ -298,7 +298,7 @@ def _mm_sequence_to_string(d):
   | join(["sequenceDiagram"] + p_lines + m_lines, "\n")
 end
 
-def _mm_pie_to_string(d):
+def _mm_pie_stringify(d):
   let ttl    = d["title"]
   | let slcs = d["slices"]
   | let hdr  = if (len(ttl) > 0): "pie title " + ttl else: "pie"
@@ -308,7 +308,7 @@ def _mm_pie_to_string(d):
   | join([hdr] + s_lines, "\n")
 end
 
-def _mm_class_to_string(d):
+def _mm_class_stringify(d):
   let cls_list = d["classes"]
   | let rel_list = d["relations"]
   | let c_lines = map(cls_list, fn(c): "  class " + c["name"];)
@@ -340,16 +340,16 @@ end
 #   pie                →  pie title {title}\n  "{label}" : {value}
 #   classDiagram       →  classDiagram\n  class …\n  …relations…
 #   unknown            →  {type}\n  …raw_lines…
-def mermaid_to_string(diagram):
+def mermaid_stringify(diagram):
   let t = diagram["type"]
   | if (t == "flowchart"):
-      _mm_flowchart_to_string(diagram)
+      _mm_flowchart_stringify(diagram)
     elif (t == "sequenceDiagram"):
-      _mm_sequence_to_string(diagram)
+      _mm_sequence_stringify(diagram)
     elif (t == "pie"):
-      _mm_pie_to_string(diagram)
+      _mm_pie_stringify(diagram)
     elif (t == "classDiagram"):
-      _mm_class_to_string(diagram)
+      _mm_class_stringify(diagram)
     else:
       do
         let raw_lines = diagram["raw_lines"]

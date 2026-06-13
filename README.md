@@ -28,7 +28,7 @@ mq -I raw 'import "github.com/harehare/mermaid.mq" | mermaid::mermaid_parse(.)' 
 Pin to a specific release with `@vX.Y.Z`:
 
 ```sh
-mq -I raw 'import "github.com/harehare/mermaid.mq@v1.0.0" | mermaid::mermaid_parse(.)' diagram.mmd
+mq -I raw 'import "github.com/harehare/mermaid.mq@v0.1.0" | mermaid::mermaid_parse(.)' diagram.mmd
 ```
 
 ## Usage
@@ -145,10 +145,6 @@ mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | ."classes" | map(
 mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | ."relations"' class.mmd
 # => [{"from":"Animal","to":"Dog","rel":"<|--","label":"extends"}, ...]
 ```
-
-## Compatibility
-
-Requires [mq](https://github.com/harehare/mq) v0.5 or later.
 
 ## License
 
