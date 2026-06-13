@@ -14,151 +14,177 @@ end
 
 # ─── flowchart ────────────────────────────────────────────────────────────────
 
-# Parse a node token like: A, A[label], A{label}, A(label), A((label)), A([label])
 def _mm_parse_node(tok):
   let t = trim(tok)
   | if (is_regex_match(t, "^[A-Za-z0-9_]+\\(\\([^)]*\\)\\)")):
-      let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\(\\((?P<label>[^)]*)\\)\\)")
-      | {"id": m["id"], "label": m["label"], "shape": "circle"}
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\(\\((?P<label>[^)]*)\\)\\)")
+        | {"id": m["id"], "label": m["label"], "shape": "circle"}
+      end
     elif (is_regex_match(t, "^[A-Za-z0-9_]+\\(\\[[^\\]]*\\]\\)")):
-      let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\(\\[(?P<label>[^\\]]*)\\]\\)")
-      | {"id": m["id"], "label": m["label"], "shape": "stadium"}
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\(\\[(?P<label>[^\\]]*)\\]\\)")
+        | {"id": m["id"], "label": m["label"], "shape": "stadium"}
+      end
     elif (is_regex_match(t, "^[A-Za-z0-9_]+\\[[^\\]]*\\]")):
-      let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\[(?P<label>[^\\]]*)\\]")
-      | {"id": m["id"], "label": m["label"], "shape": "rect"}
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\[(?P<label>[^\\]]*)\\]")
+        | {"id": m["id"], "label": m["label"], "shape": "rect"}
+      end
     elif (is_regex_match(t, "^[A-Za-z0-9_]+\\{[^}]*\\}")):
-      let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\{(?P<label>[^}]*)\\}")
-      | {"id": m["id"], "label": m["label"], "shape": "diamond"}
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\{(?P<label>[^}]*)\\}")
+        | {"id": m["id"], "label": m["label"], "shape": "diamond"}
+      end
     elif (is_regex_match(t, "^[A-Za-z0-9_]+\\([^)]*\\)")):
-      let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\((?P<label>[^)]*)\\)")
-      | {"id": m["id"], "label": m["label"], "shape": "round"}
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\((?P<label>[^)]*)\\)")
+        | {"id": m["id"], "label": m["label"], "shape": "round"}
+      end
     else:
       {"id": t, "label": t, "shape": "rect"}
 end
 
-def _mm_add_node(nodes, node):
-  if (any(nodes, fn(n): n["id"] == node["id"];)):
-    nodes
+def _mm_add_node(nd_list, node):
+  if (any(nd_list, fn(n): n["id"] == node["id"];)):
+    nd_list
   else:
-    nodes + [node]
+    nd_list + [node]
 end
 
-def _mm_parse_flowchart_line(line, nodes, edges):
+def _mm_parse_flowchart_line(line, nd_list, eg_list):
   let l = trim(line)
-  | if (is_regex_match(l, "^(subgraph|end\\b|style\\b|classDef\\b|class\\b|linkStyle\\b)")):
-      [nodes, edges]
+  | if (len(l) == 0 || is_regex_match(l, "^(subgraph|end\\b|style\\b|classDef\\b|class\\b|linkStyle\\b)")):
+      [nd_list, eg_list]
     # A -->|label| B
     elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*-->\\|[^|]*\\|\\s*[A-Za-z0-9_\\[\\]{}()]+")):
-      let m = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*-->\\|(?P<label>[^|]*)\\|\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
-      | let fn_ = _mm_parse_node(m["from"])
-      | let tn  = _mm_parse_node(m["to"])
-      | [_mm_add_node(_mm_add_node(nodes, fn_), tn), edges + [{"from": fn_["id"], "to": tn["id"], "label": trim(m["label"])}]]
+      do
+        let m   = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*-->\\|(?P<label>[^|]*)\\|\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
+        | let fn_ = _mm_parse_node(m["from"])
+        | let tn  = _mm_parse_node(m["to"])
+        | let new_nd = _mm_add_node(_mm_add_node(nd_list, fn_), tn)
+        | [new_nd, eg_list + [{"from": fn_["id"], "to": tn["id"], "label": trim(m["label"])}]]
+      end
     # A -- label --> B
     elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*--[^>-].*-->\\s*[A-Za-z0-9_\\[\\]{}()]+")):
-      let m = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*--(?P<label>[^>-].*)-->\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
-      | let fn_ = _mm_parse_node(m["from"])
-      | let tn  = _mm_parse_node(m["to"])
-      | [_mm_add_node(_mm_add_node(nodes, fn_), tn), edges + [{"from": fn_["id"], "to": tn["id"], "label": trim(m["label"])}]]
-    # A --> B  or  A --- B  or  A ==> B  or  A -.-> B
-    elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*(-->|---|==>|\\.-\\.>|\\.-\\.)\\s*[A-Za-z0-9_\\[\\]{}()]+")):
-      let m = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*(?P<arrow>-->|---|==>|\\.-\\.>|\\.-\\.)\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
-      | let fn_ = _mm_parse_node(m["from"])
-      | let tn  = _mm_parse_node(m["to"])
-      | [_mm_add_node(_mm_add_node(nodes, fn_), tn), edges + [{"from": fn_["id"], "to": tn["id"], "label": ""}]]
+      do
+        let m   = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*--(?P<label>[^>-].*)-->\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
+        | let fn_ = _mm_parse_node(m["from"])
+        | let tn  = _mm_parse_node(m["to"])
+        | let new_nd = _mm_add_node(_mm_add_node(nd_list, fn_), tn)
+        | [new_nd, eg_list + [{"from": fn_["id"], "to": tn["id"], "label": trim(m["label"])}]]
+      end
+    # A --> B  or  A --- B  or  A ==> B
+    elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*(-->|---|==>)\\s*[A-Za-z0-9_\\[\\]{}()]+")):
+      do
+        let m   = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*(?:-->|---|==>)\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
+        | let fn_ = _mm_parse_node(m["from"])
+        | let tn  = _mm_parse_node(m["to"])
+        | let new_nd = _mm_add_node(_mm_add_node(nd_list, fn_), tn)
+        | [new_nd, eg_list + [{"from": fn_["id"], "to": tn["id"], "label": ""}]]
+      end
     # standalone node
     elif (is_regex_match(l, "^[A-Za-z0-9_]+[\\[({]")):
-      [_mm_add_node(nodes, _mm_parse_node(l)), edges]
+      [_mm_add_node(nd_list, _mm_parse_node(l)), eg_list]
     else:
-      [nodes, edges]
+      [nd_list, eg_list]
 end
 
 def _mm_parse_flowchart(lines, direction):
-  var i = 0
+  var nd_list = []
+  | var eg_list = []
+  | var i = 0
   | let n = len(lines)
-  | var nodes = []
-  | var edges = []
   | let _ = while (i < n):
-      let r = _mm_parse_flowchart_line(lines[i], nodes, edges)
-      | nodes = r[0]
-      | edges = r[1]
+      let r  = _mm_parse_flowchart_line(lines[i], nd_list, eg_list)
+      | nd_list = r[0]
+      | eg_list = r[1]
       | i += 1
-      | nodes
+      | nd_list
     end
-  | {"type": "flowchart", "direction": direction, "nodes": nodes, "edges": edges}
+  | {"type": "flowchart", "direction": direction, "nodes": nd_list, "edges": eg_list}
 end
 
 # ─── sequence diagram ─────────────────────────────────────────────────────────
 
-def _mm_parse_seq_line(line, participants, messages):
+def _mm_seq_add_participant(parts, name_):
+  if (any(parts, fn(p): p["name"] == name_;)):
+    parts
+  else:
+    parts + [{"name": name_, "alias": name_}]
+end
+
+def _mm_parse_seq_line(line, parts, msgs):
   let l = trim(line)
   | if (is_regex_match(l, "^participant\\s+")):
-      let m = capture(l, "^participant\\s+(?P<name>\\S+)(?:\\s+as\\s+(?P<alias>.+))?")
-      | let name  = if (is_none(m["name"])): "" else: m["name"]
-      | let alias = if (is_none(m["alias"]) || m["alias"] == ""): name else: trim(m["alias"])
-      | let p = {"name": name, "alias": alias}
-      | if (any(participants, fn(q): q["name"] == name;)):
-          [participants, messages]
-        else:
-          [participants + [p], messages]
-    elif (is_regex_match(l, "^actor\\s+")):
-      let m = capture(l, "^actor\\s+(?P<name>\\S+)(?:\\s+as\\s+(?P<alias>.+))?")
-      | let name  = if (is_none(m["name"])): "" else: m["name"]
-      | let alias = if (is_none(m["alias"]) || m["alias"] == ""): name else: trim(m["alias"])
-      | let p = {"name": name, "alias": alias}
-      | if (any(participants, fn(q): q["name"] == name;)):
-          [participants, messages]
-        else:
-          [participants + [p], messages]
-    elif (is_regex_match(l, "^\\S+\\s*(->>|-->>|->|-->|-x|--x|-\\)|--\\))\\s*\\S+\\s*:")):
-      let m = capture(l, "^(?P<from>\\S+)\\s*(?P<arrow>->>|-->>|->|-->|-x|--x|-\\)|--\\))\\s*(?P<to>[^:]+):\\s*(?P<text>.*)")
-      | let from_ = trim(m["from"])
-      | let to_   = trim(m["to"])
-      | let msg   = {"from": from_, "to": to_, "arrow": m["arrow"], "text": trim(m["text"])}
-      | let parts = fold([from_, to_], participants, fn(acc, name):
-          if (any(acc, fn(p): p["name"] == name;)):
-            acc
+      do
+        let m     = capture(l, "^participant\\s+(?P<name>\\S+)(?:\\s+as\\s+(?P<alias>.+))?")
+        | let nm  = if (is_none(m["name"])): "" else: m["name"]
+        | let al  = if (is_none(m["alias"]) || m["alias"] == ""): nm else: trim(m["alias"])
+        | if (any(parts, fn(p): p["name"] == nm;)):
+            [parts, msgs]
           else:
-            acc + [{"name": name, "alias": name}]
-        ;)
-      | [parts, messages + [msg]]
+            [parts + [{"name": nm, "alias": al}], msgs]
+      end
+    elif (is_regex_match(l, "^actor\\s+")):
+      do
+        let m     = capture(l, "^actor\\s+(?P<name>\\S+)(?:\\s+as\\s+(?P<alias>.+))?")
+        | let nm  = if (is_none(m["name"])): "" else: m["name"]
+        | let al  = if (is_none(m["alias"]) || m["alias"] == ""): nm else: trim(m["alias"])
+        | if (any(parts, fn(p): p["name"] == nm;)):
+            [parts, msgs]
+          else:
+            [parts + [{"name": nm, "alias": al}], msgs]
+      end
+    elif (is_regex_match(l, "^\\S+\\s*(->>|-->>|->|-->|-x|--x)\\s*\\S+\\s*:")):
+      do
+        let m    = capture(l, "^(?P<from>\\S+)\\s*(?P<arrow>->>|-->>|->|-->|-x|--x)\\s*(?P<to>[^:]+):\\s*(?P<text>.*)")
+        | let fr = trim(m["from"])
+        | let to = trim(m["to"])
+        | let msg = {"from": fr, "to": to, "arrow": m["arrow"], "text": trim(m["text"])}
+        | let new_parts = fold([fr, to], parts, fn(acc, nm_):
+            _mm_seq_add_participant(acc, nm_)
+          ;)
+        | [new_parts, msgs + [msg]]
+      end
     else:
-      [participants, messages]
+      [parts, msgs]
 end
 
 def _mm_parse_sequence(lines):
-  var i = 0
+  var parts = []
+  | var msgs  = []
+  | var i = 0
   | let n = len(lines)
-  | var participants = []
-  | var messages    = []
   | let _ = while (i < n):
-      let r = _mm_parse_seq_line(lines[i], participants, messages)
-      | participants = r[0]
-      | messages     = r[1]
+      let r  = _mm_parse_seq_line(lines[i], parts, msgs)
+      | parts = r[0]
+      | msgs  = r[1]
       | i += 1
-      | participants
+      | parts
     end
-  | {"type": "sequenceDiagram", "participants": participants, "messages": messages}
+  | {"type": "sequenceDiagram", "participants": parts, "messages": msgs}
 end
 
 # ─── pie chart ────────────────────────────────────────────────────────────────
 
 def _mm_parse_pie(lines):
-  var i = 0
-  | let n = len(lines)
+  var i      = 0
+  | let n    = len(lines)
   | var title  = ""
   | var slices = []
   | let _ = while (i < n):
       let l = trim(lines[i])
       | if (is_regex_match(l, "(?i)^pie\\s+title\\s+")):
           do
-            let m = capture(l, "(?i)^pie\\s+title\\s+(?P<t>.+)")
+            let m  = capture(l, "(?i)^pie\\s+title\\s+(?P<t>.+)")
             | title = trim(m["t"])
             | i += 1
             | title
           end
         elif (is_regex_match(l, "(?i)^title\\s+")):
           do
-            let m = capture(l, "(?i)^title\\s+(?P<t>.+)")
+            let m  = capture(l, "(?i)^title\\s+(?P<t>.+)")
             | title = trim(m["t"])
             | i += 1
             | title
@@ -178,36 +204,40 @@ end
 
 # ─── class diagram ────────────────────────────────────────────────────────────
 
-def _mm_parse_class_line(line, classes, relations):
+def _mm_parse_class_line(line, cls_list, rel_list):
   let l = trim(line)
   | if (is_regex_match(l, "^class\\s+[A-Za-z0-9_]+")):
-      let m = capture(l, "^class\\s+(?P<name>[A-Za-z0-9_]+)")
-      | let name = m["name"]
-      | if (any(classes, fn(c): c["name"] == name;)):
-          [classes, relations]
-        else:
-          [classes + [{"name": name, "members": []}], relations]
-    elif (is_regex_match(l, "[A-Za-z0-9_]+\\s*(--|<\\|--|\\|>--|<--\\|>|\\.\\.>|<\\.\\.|\\*--|--\\*|o--|--o)\\s*[A-Za-z0-9_]+")):
-      let m = capture(l, "(?P<from>[A-Za-z0-9_]+)\\s*(?P<rel>--|<\\|--|\\|>--|<--\\|>|\\.\\.>|<\\.\\.|\\*--|--\\*|o--|--o)\\s*(?P<to>[A-Za-z0-9_]+)(?:\\s*:\\s*(?P<label>.+))?")
-      | let label = if (is_none(m["label"])): "" else: trim(m["label"])
-      | [classes, relations + [{"from": m["from"], "to": m["to"], "rel": m["rel"], "label": label}]]
+      do
+        let m    = capture(l, "^class\\s+(?P<name>[A-Za-z0-9_]+)")
+        | let nm = m["name"]
+        | if (any(cls_list, fn(c): c["name"] == nm;)):
+            [cls_list, rel_list]
+          else:
+            [cls_list + [{"name": nm, "members": []}], rel_list]
+      end
+    elif (is_regex_match(l, "[A-Za-z0-9_]+\\s*(--|<\\|--|\\|>--|\\*--|--\\*|o--|--o)\\s*[A-Za-z0-9_]+")):
+      do
+        let m     = capture(l, "(?P<from>[A-Za-z0-9_]+)\\s*(?P<rel>--|<\\|--|\\|>--|\\*--|--\\*|o--|--o)\\s*(?P<to>[A-Za-z0-9_]+)(?:\\s*:\\s*(?P<label>.+))?")
+        | let lbl = if (is_none(m["label"])): "" else: trim(m["label"])
+        | [cls_list, rel_list + [{"from": m["from"], "to": m["to"], "rel": m["rel"], "label": lbl}]]
+      end
     else:
-      [classes, relations]
+      [cls_list, rel_list]
 end
 
 def _mm_parse_class(lines):
-  var i = 0
+  var cls_list = []
+  | var rel_list = []
+  | var i = 0
   | let n = len(lines)
-  | var classes   = []
-  | var relations = []
   | let _ = while (i < n):
-      let r = _mm_parse_class_line(lines[i], classes, relations)
-      | classes   = r[0]
-      | relations = r[1]
+      let r      = _mm_parse_class_line(lines[i], cls_list, rel_list)
+      | cls_list = r[0]
+      | rel_list = r[1]
       | i += 1
-      | classes
+      | cls_list
     end
-  | {"type": "classDiagram", "classes": classes, "relations": relations}
+  | {"type": "classDiagram", "classes": cls_list, "relations": rel_list}
 end
 
 # ─── public API ───────────────────────────────────────────────────────────────

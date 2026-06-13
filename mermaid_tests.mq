@@ -1,0 +1,204 @@
+include "test"
+| include "mermaid"
+|
+
+def _flowchart_lr():
+  "graph LR\n  A[Start] --> B{Decision}\n  B -->|yes| C[Done]\n  B -->|no| D[Skip]"
+end
+
+def _flowchart_td():
+  "flowchart TD\n  A --> B\n  B --> C"
+end
+
+def _seq():
+  "sequenceDiagram\n  participant Alice\n  participant Bob\n  Alice ->> Bob: Hello\n  Bob -->> Alice: World"
+end
+
+def _pie():
+  "pie title Languages\n  \"Rust\" : 45\n  \"Go\" : 30\n  \"Python\" : 25"
+end
+
+def _class():
+  "classDiagram\n  class Animal\n  class Dog\n  Animal <|-- Dog : inherits"
+end
+
+# -- flowchart type --
+
+def test_flowchart_type():
+  let result = mermaid_parse(_flowchart_lr())
+  | assert_eq(result["type"], "flowchart")
+end
+
+def test_graph_type_also_flowchart():
+  let result = mermaid_parse(_flowchart_td())
+  | assert_eq(result["type"], "flowchart")
+end
+
+def test_flowchart_direction_lr():
+  let result = mermaid_parse(_flowchart_lr())
+  | assert_eq(result["direction"], "LR")
+end
+
+def test_flowchart_direction_td():
+  let result = mermaid_parse(_flowchart_td())
+  | assert_eq(result["direction"], "TD")
+end
+
+# -- flowchart nodes --
+
+def test_flowchart_nodes_exist():
+  let result = mermaid_parse(_flowchart_lr())
+  | assert_not_empty(result["nodes"])
+end
+
+def test_flowchart_node_rect_shape():
+  let result = mermaid_parse(_flowchart_lr())
+  | let node = first(filter(result["nodes"], fn(n): n["id"] == "A";))
+  | assert_eq(node["shape"], "rect")
+end
+
+def test_flowchart_node_diamond_shape():
+  let result = mermaid_parse(_flowchart_lr())
+  | let node = first(filter(result["nodes"], fn(n): n["id"] == "B";))
+  | assert_eq(node["shape"], "diamond")
+end
+
+def test_flowchart_node_label():
+  let result = mermaid_parse(_flowchart_lr())
+  | let node = first(filter(result["nodes"], fn(n): n["id"] == "A";))
+  | assert_eq(node["label"], "Start")
+end
+
+def test_flowchart_simple_nodes_collected():
+  let result = mermaid_parse(_flowchart_td())
+  | let ids = map(result["nodes"], fn(n): n["id"];)
+  | assert_contains(ids, "A")
+  | assert_contains(ids, "B")
+  | assert_contains(ids, "C")
+end
+
+# -- flowchart edges --
+
+def test_flowchart_edge_count():
+  let result = mermaid_parse(_flowchart_lr())
+  | assert_len(result["edges"], 3)
+end
+
+def test_flowchart_edge_from_to():
+  let result = mermaid_parse(_flowchart_lr())
+  | let edge = first(filter(result["edges"], fn(e): e["from"] == "A";))
+  | assert_eq(edge["to"], "B")
+end
+
+def test_flowchart_edge_with_label():
+  let result = mermaid_parse(_flowchart_lr())
+  | let labeled = filter(result["edges"], fn(e): len(e["label"]) > 0;)
+  | assert_not_empty(labeled)
+  | let yes_edge = first(filter(labeled, fn(e): e["label"] == "yes";))
+  | assert_eq(yes_edge["from"], "B")
+  | assert_eq(yes_edge["to"], "C")
+end
+
+def test_flowchart_simple_edge_count():
+  let result = mermaid_parse(_flowchart_td())
+  | assert_len(result["edges"], 2)
+end
+
+# -- sequence diagram --
+
+def test_seq_type():
+  let result = mermaid_parse(_seq())
+  | assert_eq(result["type"], "sequenceDiagram")
+end
+
+def test_seq_participant_count():
+  let result = mermaid_parse(_seq())
+  | assert_len(result["participants"], 2)
+end
+
+def test_seq_participant_names():
+  let result = mermaid_parse(_seq())
+  | let names = map(result["participants"], fn(p): p["name"];)
+  | assert_contains(names, "Alice")
+  | assert_contains(names, "Bob")
+end
+
+def test_seq_message_count():
+  let result = mermaid_parse(_seq())
+  | assert_len(result["messages"], 2)
+end
+
+def test_seq_message_from_to():
+  let result = mermaid_parse(_seq())
+  | let msg = first(result["messages"])
+  | assert_eq(msg["from"], "Alice")
+  | assert_eq(msg["to"], "Bob")
+end
+
+def test_seq_message_text():
+  let result = mermaid_parse(_seq())
+  | let msg = first(result["messages"])
+  | assert_eq(msg["text"], "Hello")
+end
+
+# -- pie chart --
+
+def test_pie_type():
+  let result = mermaid_parse(_pie())
+  | assert_eq(result["type"], "pie")
+end
+
+def test_pie_title():
+  let result = mermaid_parse(_pie())
+  | assert_eq(result["title"], "Languages")
+end
+
+def test_pie_slice_count():
+  let result = mermaid_parse(_pie())
+  | assert_len(result["slices"], 3)
+end
+
+def test_pie_slice_label():
+  let result = mermaid_parse(_pie())
+  | let slice = first(result["slices"])
+  | assert_eq(slice["label"], "Rust")
+end
+
+def test_pie_slice_value():
+  let result = mermaid_parse(_pie())
+  | let slice = first(result["slices"])
+  | assert_eq(slice["value"], 45)
+end
+
+# -- class diagram --
+
+def test_class_type():
+  let result = mermaid_parse(_class())
+  | assert_eq(result["type"], "classDiagram")
+end
+
+def test_class_names():
+  let result = mermaid_parse(_class())
+  | let names = map(result["classes"], fn(c): c["name"];)
+  | assert_contains(names, "Animal")
+  | assert_contains(names, "Dog")
+end
+
+def test_class_relation_count():
+  let result = mermaid_parse(_class())
+  | assert_len(result["relations"], 1)
+end
+
+def test_class_relation_from_to():
+  let result = mermaid_parse(_class())
+  | let rel = first(result["relations"])
+  | assert_eq(rel["from"], "Animal")
+  | assert_eq(rel["to"], "Dog")
+end
+
+# -- unknown type --
+
+def test_unknown_type():
+  let result = mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d")
+  | assert_eq(result["type"], "gantt")
+end
