@@ -4,6 +4,8 @@ A [Mermaid](https://mermaid.js.org/) diagram parser implemented as an [mq](https
 
 ## Features
 
+- **Parse** (`mermaid_parse`) — converts Mermaid diagram text into structured data
+- **Stringify** (`mermaid_stringify`) — converts structured data back to Mermaid diagram text (round-trip)
 - **Flowchart / Graph** — nodes (rect, round, diamond, circle, stadium), edges with optional labels, all direction keywords (`LR`, `RL`, `TD`, `TB`, `BT`)
 - **Sequence diagram** — participants, actors, and messages with all arrow types (`->>`, `-->>`, `->`, `-->`, `-x`, `--x`)
 - **Pie chart** — title and labeled slices
@@ -50,6 +52,18 @@ Parses a Mermaid diagram string and returns structured data.
 | `pie` | `type`, `title`, `slices` |
 | `classDiagram` | `type`, `classes`, `relations` |
 | other | `type`, `raw_lines` |
+
+### `mermaid_stringify(diagram)`
+
+Converts a parsed diagram object (as returned by `mermaid_parse`) back into Mermaid diagram text. Useful for round-tripping: parse → transform → serialize.
+
+| Diagram type | Output format |
+|---|---|
+| `flowchart` / `graph` | `graph {dir}` + edges + standalone nodes |
+| `sequenceDiagram` | `sequenceDiagram` + participants + messages |
+| `pie` | `pie title {title}` + slices |
+| `classDiagram` | `classDiagram` + class declarations + relations |
+| other | `{type}` + raw lines (indented) |
 
 ## Examples
 
@@ -144,6 +158,21 @@ mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | ."classes" | map(
 # List relationships
 mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | ."relations"' class.mmd
 # => [{"from":"Animal","to":"Dog","rel":"<|--","label":"extends"}, ...]
+```
+
+### Round-trip (parse → transform → stringify)
+
+Combine `mermaid_parse` and `mermaid_stringify` to transform a diagram and re-emit valid Mermaid text.
+
+```sh
+# Lossless round-trip
+mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | mermaid::mermaid_stringify(.)' flow.mmd
+
+# Add a node then re-serialize
+mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | . + {"nodes": ."nodes" + [{"id":"F","label":"New","shape":"rect"}]} | mermaid::mermaid_stringify(.)' flow.mmd
+
+# Keep only Alice's messages and re-serialize
+mq -L . -I raw 'import "mermaid" | mermaid::mermaid_parse(.) | . + {"messages": (."messages" | filter(fn(m): m["from"] == "Alice";))} | mermaid::mermaid_stringify(.)' seq.mmd
 ```
 
 ## License
