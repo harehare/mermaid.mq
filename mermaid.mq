@@ -240,6 +240,87 @@ def _mm_parse_class(lines):
   | {"type": "classDiagram", "classes": cls_list, "relations": rel_list}
 end
 
+# ─── serialization helpers ────────────────────────────────────────────────────
+
+def _mm_node_syntax(nd):
+  let nd_id    = nd["id"]
+  | let nd_label = nd["label"]
+  | let nd_shape = nd["shape"]
+  | if (nd_shape == "circle"):
+      nd_id + "((" + nd_label + "))"
+    elif (nd_shape == "stadium"):
+      nd_id + "([" + nd_label + "])"
+    elif (nd_shape == "diamond"):
+      nd_id + "{" + nd_label + "}"
+    elif (nd_shape == "round"):
+      nd_id + "(" + nd_label + ")"
+    elif (nd_id == nd_label):
+      nd_id
+    else:
+      nd_id + "[" + nd_label + "]"
+end
+
+def _mm_edge_line(eg, nd_list):
+  let fn_ = first(filter(nd_list, fn(n): n["id"] == eg["from"];))
+  | let tn  = first(filter(nd_list, fn(n): n["id"] == eg["to"];))
+  | let fs  = _mm_node_syntax(fn_)
+  | let ts  = _mm_node_syntax(tn)
+  | if (len(eg["label"]) > 0):
+      "  " + fs + " -->|" + eg["label"] + "| " + ts
+    else:
+      "  " + fs + " --> " + ts
+end
+
+def _mm_flowchart_to_string(d):
+  let nd_list  = d["nodes"]
+  | let eg_list  = d["edges"]
+  | let diag_dir = d["direction"]
+  | let eg_ids   = fold(eg_list, [], fn(acc, e): acc + [e["from"], e["to"]];)
+  | let standalone = filter(nd_list, fn(n): not(any(eg_ids, fn(k): k == n["id"];));)
+  | let lines = ["graph " + diag_dir]
+               + map(eg_list, fn(e): _mm_edge_line(e, nd_list);)
+               + map(standalone, fn(n): "  " + _mm_node_syntax(n);)
+  | join(lines, "\n")
+end
+
+def _mm_sequence_to_string(d):
+  let parts   = d["participants"]
+  | let msgs  = d["messages"]
+  | let p_lines = map(parts, fn(p):
+      if (p["name"] == p["alias"]):
+        "  participant " + p["name"]
+      else:
+        "  participant " + p["name"] + " as " + p["alias"]
+    ;)
+  | let m_lines = map(msgs, fn(m):
+      "  " + m["from"] + " " + m["arrow"] + " " + m["to"] + ": " + m["text"]
+    ;)
+  | join(["sequenceDiagram"] + p_lines + m_lines, "\n")
+end
+
+def _mm_pie_to_string(d):
+  let ttl    = d["title"]
+  | let slcs = d["slices"]
+  | let hdr  = if (len(ttl) > 0): "pie title " + ttl else: "pie"
+  | let s_lines = map(slcs, fn(s):
+      "  \"" + s["label"] + "\" : " + to_string(s["value"])
+    ;)
+  | join([hdr] + s_lines, "\n")
+end
+
+def _mm_class_to_string(d):
+  let cls_list = d["classes"]
+  | let rel_list = d["relations"]
+  | let c_lines = map(cls_list, fn(c): "  class " + c["name"];)
+  | let r_lines = map(rel_list, fn(r):
+      if (len(r["label"]) > 0):
+        "  " + r["from"] + " " + r["rel"] + " " + r["to"] + " : " + r["label"]
+      else:
+        "  " + r["from"] + " " + r["rel"] + " " + r["to"]
+    ;)
+  | join(["classDiagram"] + c_lines + r_lines, "\n")
+end
+
 # ─── public API ───────────────────────────────────────────────────────────────
 
 # Parses a Mermaid diagram string and returns structured data.
@@ -251,6 +332,31 @@ end
 #   classDiagram       → { type, classes, relations }
 #
 # Unknown diagram types return { type, raw_lines }.
+# Converts a parsed Mermaid diagram back to Mermaid diagram text.
+#
+# Supported diagram types:
+#   flowchart / graph  →  graph {dir}\n  …edges…\n  …standalone nodes…
+#   sequenceDiagram    →  sequenceDiagram\n  participant …\n  …messages…
+#   pie                →  pie title {title}\n  "{label}" : {value}
+#   classDiagram       →  classDiagram\n  class …\n  …relations…
+#   unknown            →  {type}\n  …raw_lines…
+def mermaid_to_string(diagram):
+  let t = diagram["type"]
+  | if (t == "flowchart"):
+      _mm_flowchart_to_string(diagram)
+    elif (t == "sequenceDiagram"):
+      _mm_sequence_to_string(diagram)
+    elif (t == "pie"):
+      _mm_pie_to_string(diagram)
+    elif (t == "classDiagram"):
+      _mm_class_to_string(diagram)
+    else:
+      do
+        let raw_lines = diagram["raw_lines"]
+        | join([t] + map(raw_lines, fn(l): "  " + l;), "\n")
+      end
+end
+
 def mermaid_parse(input):
   let all_lines = _mm_lines(input)
   | if (is_empty(all_lines)):

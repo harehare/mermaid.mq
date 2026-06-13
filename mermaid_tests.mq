@@ -202,3 +202,374 @@ def test_unknown_type():
   let result = mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d")
   | assert_eq(result["type"], "gantt")
 end
+
+# ─── additional fixtures ───────────────────────────────────────────────────────
+
+def _flowchart_shapes():
+  "graph TB\n  A((Circle))\n  B([Stadium])\n  C(Round)\n  D{Diamond}\n  E[Rect]"
+end
+
+def _flowchart_standalone():
+  "graph LR\n  A[Alone]"
+end
+
+def _seq_alias():
+  "sequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A ->> B: Hello\n  B -->> A: World"
+end
+
+def _pie_no_title():
+  "pie\n  \"X\" : 60\n  \"Y\" : 40"
+end
+
+def _class_no_label():
+  "classDiagram\n  class Foo\n  class Bar\n  Foo -- Bar"
+end
+
+# ─── mermaid_to_string: flowchart ─────────────────────────────────────────────
+
+def test_to_string_flowchart_not_empty():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_lr()))
+  | assert_not_empty(result)
+end
+
+def test_to_string_flowchart_lr_header():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_lr()))
+  | assert_eq(first(split(result, "\n")), "graph LR")
+end
+
+def test_to_string_flowchart_td_header():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_td()))
+  | assert_eq(first(split(result, "\n")), "graph TD")
+end
+
+def test_to_string_flowchart_edge_no_label():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_td()))
+  | assert_contains(split(result, "\n"), "  A --> B")
+end
+
+def test_to_string_flowchart_edge_with_label_yes():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_lr()))
+  | assert_contains(split(result, "\n"), "  B{Decision} -->|yes| C[Done]")
+end
+
+def test_to_string_flowchart_edge_with_label_no():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_lr()))
+  | assert_contains(split(result, "\n"), "  B{Decision} -->|no| D[Skip]")
+end
+
+def test_to_string_flowchart_rect_node_in_edge():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_lr()))
+  | assert_contains(split(result, "\n"), "  A[Start] --> B{Decision}")
+end
+
+def test_to_string_flowchart_standalone_node():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_standalone()))
+  | assert_contains(split(result, "\n"), "  A[Alone]")
+end
+
+def test_to_string_flowchart_standalone_line_count():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_standalone()))
+  | assert_len(split(result, "\n"), 2)
+end
+
+# ─── mermaid_to_string: node shapes ──────────────────────────────────────────
+
+def test_to_string_node_circle():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_shapes()))
+  | assert_contains(split(result, "\n"), "  A((Circle))")
+end
+
+def test_to_string_node_stadium():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_shapes()))
+  | assert_contains(split(result, "\n"), "  B([Stadium])")
+end
+
+def test_to_string_node_round():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_shapes()))
+  | assert_contains(split(result, "\n"), "  C(Round)")
+end
+
+def test_to_string_node_diamond():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_shapes()))
+  | assert_contains(split(result, "\n"), "  D{Diamond}")
+end
+
+def test_to_string_node_rect():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_shapes()))
+  | assert_contains(split(result, "\n"), "  E[Rect]")
+end
+
+def test_to_string_node_simple_id_no_brackets():
+  let result = mermaid_to_string(mermaid_parse(_flowchart_td()))
+  | assert_contains(split(result, "\n"), "  A --> B")
+end
+
+# ─── mermaid_to_string: sequence diagram ─────────────────────────────────────
+
+def test_to_string_seq_header():
+  let result = mermaid_to_string(mermaid_parse(_seq()))
+  | assert_eq(first(split(result, "\n")), "sequenceDiagram")
+end
+
+def test_to_string_seq_participant_alice():
+  let result = mermaid_to_string(mermaid_parse(_seq()))
+  | assert_contains(split(result, "\n"), "  participant Alice")
+end
+
+def test_to_string_seq_participant_bob():
+  let result = mermaid_to_string(mermaid_parse(_seq()))
+  | assert_contains(split(result, "\n"), "  participant Bob")
+end
+
+def test_to_string_seq_message_forward():
+  let result = mermaid_to_string(mermaid_parse(_seq()))
+  | assert_contains(split(result, "\n"), "  Alice ->> Bob: Hello")
+end
+
+def test_to_string_seq_message_return():
+  let result = mermaid_to_string(mermaid_parse(_seq()))
+  | assert_contains(split(result, "\n"), "  Bob -->> Alice: World")
+end
+
+def test_to_string_seq_alias_name():
+  let result = mermaid_to_string(mermaid_parse(_seq_alias()))
+  | assert_contains(split(result, "\n"), "  participant A as Alice")
+end
+
+def test_to_string_seq_alias_b():
+  let result = mermaid_to_string(mermaid_parse(_seq_alias()))
+  | assert_contains(split(result, "\n"), "  participant B as Bob")
+end
+
+# ─── mermaid_to_string: pie chart ────────────────────────────────────────────
+
+def test_to_string_pie_header_with_title():
+  let result = mermaid_to_string(mermaid_parse(_pie()))
+  | assert_eq(first(split(result, "\n")), "pie title Languages")
+end
+
+def test_to_string_pie_header_no_title():
+  let result = mermaid_to_string(mermaid_parse(_pie_no_title()))
+  | assert_eq(first(split(result, "\n")), "pie")
+end
+
+def test_to_string_pie_slice_rust():
+  let result = mermaid_to_string(mermaid_parse(_pie()))
+  | assert_contains(split(result, "\n"), "  \"Rust\" : 45")
+end
+
+def test_to_string_pie_slice_go():
+  let result = mermaid_to_string(mermaid_parse(_pie()))
+  | assert_contains(split(result, "\n"), "  \"Go\" : 30")
+end
+
+def test_to_string_pie_slice_no_title():
+  let result = mermaid_to_string(mermaid_parse(_pie_no_title()))
+  | assert_contains(split(result, "\n"), "  \"X\" : 60")
+end
+
+def test_to_string_pie_line_count():
+  let result = mermaid_to_string(mermaid_parse(_pie()))
+  | assert_len(split(result, "\n"), 4)
+end
+
+# ─── mermaid_to_string: class diagram ────────────────────────────────────────
+
+def test_to_string_class_header():
+  let result = mermaid_to_string(mermaid_parse(_class()))
+  | assert_eq(first(split(result, "\n")), "classDiagram")
+end
+
+def test_to_string_class_animal_line():
+  let result = mermaid_to_string(mermaid_parse(_class()))
+  | assert_contains(split(result, "\n"), "  class Animal")
+end
+
+def test_to_string_class_dog_line():
+  let result = mermaid_to_string(mermaid_parse(_class()))
+  | assert_contains(split(result, "\n"), "  class Dog")
+end
+
+def test_to_string_class_relation_with_label():
+  let result = mermaid_to_string(mermaid_parse(_class()))
+  | assert_contains(split(result, "\n"), "  Animal <|-- Dog : inherits")
+end
+
+def test_to_string_class_relation_no_label():
+  let result = mermaid_to_string(mermaid_parse(_class_no_label()))
+  | assert_contains(split(result, "\n"), "  Foo -- Bar")
+end
+
+# ─── mermaid_to_string: unknown type ─────────────────────────────────────────
+
+def test_to_string_unknown_header():
+  let result = mermaid_to_string(mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d"))
+  | assert_eq(first(split(result, "\n")), "gantt")
+end
+
+def test_to_string_unknown_raw_lines():
+  let result = mermaid_to_string(mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d"))
+  | assert_contains(split(result, "\n"), "  title Plan")
+end
+
+# ─── round-trip: mermaid_parse(mermaid_to_string(mermaid_parse(x))) ───────────
+
+def test_roundtrip_flowchart_type():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["type"], parsed["type"])
+end
+
+def test_roundtrip_flowchart_direction():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["direction"], parsed["direction"])
+end
+
+def test_roundtrip_flowchart_node_count():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["nodes"], len(parsed["nodes"]))
+end
+
+def test_roundtrip_flowchart_node_ids():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let rt_ids = map(rt["nodes"], fn(n): n["id"];)
+  | assert_contains(rt_ids, "A")
+  | assert_contains(rt_ids, "B")
+  | assert_contains(rt_ids, "C")
+  | assert_contains(rt_ids, "D")
+end
+
+def test_roundtrip_flowchart_node_shapes():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let nd_b  = first(filter(rt["nodes"], fn(n): n["id"] == "B";))
+  | assert_eq(nd_b["shape"], "diamond")
+end
+
+def test_roundtrip_flowchart_edge_count():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["edges"], len(parsed["edges"]))
+end
+
+def test_roundtrip_flowchart_edge_label():
+  let parsed = mermaid_parse(_flowchart_lr())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let yes_e = first(filter(rt["edges"], fn(e): e["label"] == "yes";))
+  | assert_eq(yes_e["from"], "B")
+  | assert_eq(yes_e["to"],   "C")
+end
+
+def test_roundtrip_flowchart_td_direction():
+  let parsed = mermaid_parse(_flowchart_td())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["direction"], "TD")
+end
+
+def test_roundtrip_seq_type():
+  let parsed = mermaid_parse(_seq())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["type"], parsed["type"])
+end
+
+def test_roundtrip_seq_participant_count():
+  let parsed = mermaid_parse(_seq())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["participants"], len(parsed["participants"]))
+end
+
+def test_roundtrip_seq_participant_names():
+  let parsed = mermaid_parse(_seq())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let nms   = map(rt["participants"], fn(p): p["name"];)
+  | assert_contains(nms, "Alice")
+  | assert_contains(nms, "Bob")
+end
+
+def test_roundtrip_seq_message_count():
+  let parsed = mermaid_parse(_seq())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["messages"], len(parsed["messages"]))
+end
+
+def test_roundtrip_seq_message_arrow():
+  let parsed = mermaid_parse(_seq())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let msg   = first(rt["messages"])
+  | assert_eq(msg["arrow"], "->>")
+end
+
+def test_roundtrip_seq_alias():
+  let parsed = mermaid_parse(_seq_alias())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let p_a   = first(filter(rt["participants"], fn(p): p["name"] == "A";))
+  | assert_eq(p_a["alias"], "Alice")
+end
+
+def test_roundtrip_pie_type():
+  let parsed = mermaid_parse(_pie())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["type"], parsed["type"])
+end
+
+def test_roundtrip_pie_title():
+  let parsed = mermaid_parse(_pie())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["title"], parsed["title"])
+end
+
+def test_roundtrip_pie_slice_count():
+  let parsed = mermaid_parse(_pie())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["slices"], len(parsed["slices"]))
+end
+
+def test_roundtrip_pie_slice_labels():
+  let parsed = mermaid_parse(_pie())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let lbls  = map(rt["slices"], fn(s): s["label"];)
+  | assert_contains(lbls, "Rust")
+  | assert_contains(lbls, "Go")
+  | assert_contains(lbls, "Python")
+end
+
+def test_roundtrip_pie_no_title():
+  let parsed = mermaid_parse(_pie_no_title())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["title"], "")
+end
+
+def test_roundtrip_class_type():
+  let parsed = mermaid_parse(_class())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_eq(rt["type"], parsed["type"])
+end
+
+def test_roundtrip_class_count():
+  let parsed = mermaid_parse(_class())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["classes"], len(parsed["classes"]))
+end
+
+def test_roundtrip_class_relation_count():
+  let parsed = mermaid_parse(_class())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | assert_len(rt["relations"], len(parsed["relations"]))
+end
+
+def test_roundtrip_class_relation_label():
+  let parsed = mermaid_parse(_class())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let rel   = first(rt["relations"])
+  | assert_eq(rel["label"], "inherits")
+end
+
+def test_roundtrip_class_no_label():
+  let parsed = mermaid_parse(_class_no_label())
+  | let rt    = mermaid_parse(mermaid_to_string(parsed))
+  | let rel   = first(rt["relations"])
+  | assert_eq(rel["label"], "")
+end
