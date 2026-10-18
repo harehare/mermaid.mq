@@ -16,7 +16,22 @@ end
 
 def _mm_parse_node(tok):
   let t = trim(tok)
-  | if (is_regex_match(t, "^[A-Za-z0-9_]+\\(\\([^)]*\\)\\)")):
+  | if (is_regex_match(t, "^[A-Za-z0-9_]+\\[\\([^)]*\\)\\]")):
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\[\\((?P<label>[^)]*)\\)\\]")
+        | {"id": m["id"], "label": m["label"], "shape": "cylinder"}
+      end
+    elif (is_regex_match(t, "^[A-Za-z0-9_]+\\[\\[[^\\]]*\\]\\]")):
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\[\\[(?P<label>[^\\]]*)\\]\\]")
+        | {"id": m["id"], "label": m["label"], "shape": "subroutine"}
+      end
+    elif (is_regex_match(t, "^[A-Za-z0-9_]+\\{\\{[^}]*\\}\\}")):
+      do
+        let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\{\\{(?P<label>[^}]*)\\}\\}")
+        | {"id": m["id"], "label": m["label"], "shape": "hexagon"}
+      end
+    elif (is_regex_match(t, "^[A-Za-z0-9_]+\\(\\([^)]*\\)\\)")):
       do
         let m = capture(t, "^(?P<id>[A-Za-z0-9_]+)\\(\\((?P<label>[^)]*)\\)\\)")
         | {"id": m["id"], "label": m["label"], "shape": "circle"}
@@ -45,64 +60,164 @@ def _mm_parse_node(tok):
       {"id": t, "label": t, "shape": "rect"}
 end
 
+# Regex for a node reference: an id optionally followed by a bracketed label
+# (labels may contain spaces).
+def _mm_node_token():
+  "[A-Za-z0-9_]+(?:\\(\\([^)]*\\)\\)|\\(\\[[^\\]]*\\]\\)|\\[\\([^)]*\\)\\]|\\[\\[[^\\]]*\\]\\]|\\{\\{[^}]*\\}\\}|\\[[^\\]]*\\]|\\{[^}]*\\}|\\([^)]*\\))?"
+end
+
+# A later definition with an explicit label or shape replaces an earlier bare mention.
 def _mm_add_node(nd_list, node):
   if (any(nd_list, fn(n): n["id"] == node["id"];)):
-    nd_list
+    if (node["label"] == node["id"] && node["shape"] == "rect"):
+      nd_list
+    else:
+      map(nd_list, fn(n): if (n["id"] == node["id"]): node else: n;)
   else:
     nd_list + [node]
 end
 
-def _mm_parse_flowchart_line(line, nd_list, eg_list):
-  let l = trim(line)
-  | if (len(l) == 0 || is_regex_match(l, "^(subgraph|end\\b|style\\b|classDef\\b|class\\b|linkStyle\\b)")):
-      [nd_list, eg_list]
-    # A -->|label| B
-    elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*-->\\|[^|]*\\|\\s*[A-Za-z0-9_\\[\\]{}()]+")):
+# Link operators and the text-in-line forms `-- text -->`, `== text ==>`, `-. text .->`.
+def _mm_ops_re():
+  "(?:<-->|-\\.->|-\\.-|-->|---|==>|===|--x|--o)"
+end
+
+# Parses a link at the start of `rest`. Returns [{op, label}, rest] or None.
+def _mm_flow_link(rest):
+  if (is_regex_match(rest, "^--\\s+.+?\\s+(?:-->|---|--x|--o)(?:\\s|$)")):
+    do
+      let m = capture(rest, "^--\\s+(?P<label>.+?)\\s+(?P<op>-->|---|--x|--o)\\s*(?P<rest>.*)$")
+      | [{"op": m["op"], "label": trim(m["label"])}, m["rest"]]
+    end
+  elif (is_regex_match(rest, "^==\\s+.+?\\s+(?:==>|===)(?:\\s|$)")):
+    do
+      let m = capture(rest, "^==\\s+(?P<label>.+?)\\s+(?P<op>==>|===)\\s*(?P<rest>.*)$")
+      | [{"op": m["op"], "label": trim(m["label"])}, m["rest"]]
+    end
+  elif (is_regex_match(rest, "^-\\.\\s+.+?\\s+\\.-(?:>)?(?:\\s|$)")):
+    do
+      let m = capture(rest, "^-\\.\\s+(?P<label>.+?)\\s+\\.-(?P<head>>)?\\s*(?P<rest>.*)$")
+      | [{"op": if (is_none(m["head"])): "-.-" else: "-.->", "label": trim(m["label"])}, m["rest"]]
+    end
+  elif (is_regex_match(rest, "^" + _mm_ops_re())):
+    do
+      let m = capture(rest, "^(?P<op>" + _mm_ops_re() + ")(?:\\|(?P<label>[^|]*)\\|)?\\s*(?P<rest>.*)$")
+      | [{"op": m["op"], "label": if (is_none(m["label"])): "" else: trim(m["label"])}, m["rest"]]
+    end
+  else:
+    None
+end
+
+# Splits a statement into alternating node groups and links:
+# `A & B --> C -->|x| D` => [{nodes:[A, B]}, {op, label}, {nodes:[C]}, {op, label}, {nodes:[D]}].
+# Returns [] when the line is not a statement.
+def _mm_flow_items(line):
+  let tk = _mm_node_token()
+  | var rest = line
+  | var items = []
+  | var want_node = true
+  | var joining = false
+  | var ok = true
+  | var guard = 0
+  | let _ = while (ok && len(rest) > 0 && guard < 60):
       do
-        let m   = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*-->\\|(?P<label>[^|]*)\\|\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
-        | let fn_ = _mm_parse_node(m["from"])
-        | let tn  = _mm_parse_node(m["to"])
-        | let new_nd = _mm_add_node(_mm_add_node(nd_list, fn_), tn)
-        | [new_nd, eg_list + [{"from": fn_["id"], "to": tn["id"], "label": trim(m["label"])}]]
+        if (want_node):
+          if (is_regex_match(rest, "^" + tk)):
+            do
+              let m   = capture(rest, "^(?P<t>" + tk + ")\\s*(?P<rest>.*)$")
+              | let amp = is_regex_match(m["rest"], "^&\\s*")
+              | items = if (joining): slice(items, 0, len(items) - 1) + [{"nodes": last(items)["nodes"] + [m["t"]]}] else: items + [{"nodes": [m["t"]]}]
+              | rest = if (amp): gsub(m["rest"], "^&\\s*", "") else: m["rest"]
+              | joining = amp
+              | want_node = amp
+            end
+          else:
+            ok = false
+        else:
+          do
+            let r = _mm_flow_link(rest)
+            | if (is_none(r)):
+                ok = false
+              else:
+                do
+                  items = items + [r[0]]
+                  | rest = r[1]
+                  | want_node = true
+                end
+          end
+        | guard += 1
       end
-    # A -- label --> B
-    elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*--[^>-].*-->\\s*[A-Za-z0-9_\\[\\]{}()]+")):
+    end
+  | if (ok && not(want_node) && len(items) > 0): items else: []
+end
+
+def _mm_sg_member(sgs, nid):
+  any(sgs, fn(g): any(g["nodes"], fn(k): k == nid;);)
+end
+
+# Adds a node to a subgraph unless it already belongs to one.
+def _mm_sg_add(sgs, gid, nid):
+  if (_mm_sg_member(sgs, nid)):
+    sgs
+  else:
+    map(sgs, fn(g): if (g["id"] == gid): {"id": g["id"], "title": g["title"], "nodes": g["nodes"] + [nid], "parent": g["parent"]} else: g;)
+end
+
+# State of the parser: [nodes, edges, subgraphs, stack of open subgraph ids].
+def _mm_parse_flowchart_line(line, nd_list, eg_list, sgs, stack):
+  let l = trim(gsub(line, ":::[A-Za-z0-9_-]+", ""))
+  | if (len(l) == 0 || is_regex_match(l, "^(style\\b|classDef\\b|class\\b|linkStyle\\b|direction\\b|click\\b)")):
+      [nd_list, eg_list, sgs, stack]
+    elif (is_regex_match(l, "^subgraph\\b")):
       do
-        let m   = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*--(?P<label>[^>-].*)-->\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
-        | let fn_ = _mm_parse_node(m["from"])
-        | let tn  = _mm_parse_node(m["to"])
-        | let new_nd = _mm_add_node(_mm_add_node(nd_list, fn_), tn)
-        | [new_nd, eg_list + [{"from": fn_["id"], "to": tn["id"], "label": trim(m["label"])}]]
+        let titled = is_regex_match(l, "^subgraph\\s+[A-Za-z0-9_]+\\s*\\[")
+        | let m  = if (titled): capture(l, "^subgraph\\s+(?P<id>[A-Za-z0-9_]+)\\s*\\[\\s*\"?(?P<title>[^\\]\"]*)\"?\\s*\\]") else: capture(l, "^subgraph\\s*(?P<title>.*)$")
+        | let title = trim(m["title"])
+        | let gid   = if (titled): m["id"] else: gsub(title, "[^A-Za-z0-9_]+", "_")
+        | let g     = {"id": gid, "title": if (len(title) == 0): gid else: title, "nodes": [], "parent": if (is_empty(stack)): "" else: last(stack)}
+        | [nd_list, eg_list, sgs + [g], stack + [gid]]
       end
-    # A --> B  or  A --- B  or  A ==> B
-    elif (is_regex_match(l, "^[A-Za-z0-9_\\[\\]{}()]+\\s*(-->|---|==>)\\s*[A-Za-z0-9_\\[\\]{}()]+")):
-      do
-        let m   = capture(l, "^(?P<from>[A-Za-z0-9_\\[\\]{}()]+)\\s*(?:-->|---|==>)\\s*(?P<to>[A-Za-z0-9_\\[\\]{}()]+)")
-        | let fn_ = _mm_parse_node(m["from"])
-        | let tn  = _mm_parse_node(m["to"])
-        | let new_nd = _mm_add_node(_mm_add_node(nd_list, fn_), tn)
-        | [new_nd, eg_list + [{"from": fn_["id"], "to": tn["id"], "label": ""}]]
-      end
-    # standalone node
-    elif (is_regex_match(l, "^[A-Za-z0-9_]+[\\[({]")):
-      [_mm_add_node(nd_list, _mm_parse_node(l)), eg_list]
+    elif (is_regex_match(l, "^end\\b")):
+      [nd_list, eg_list, sgs, if (is_empty(stack)): stack else: slice(stack, 0, len(stack) - 1)]
     else:
-      [nd_list, eg_list]
+      do
+        let items = _mm_flow_items(l)
+        | if (is_empty(items)):
+            [nd_list, eg_list, sgs, stack]
+          else:
+            do
+              let toks = fold(items, [], fn(acc, it): if (is_none(it["nodes"])): acc else: acc + it["nodes"];)
+              | let nd2  = fold(toks, nd_list, fn(a, t): _mm_add_node(a, _mm_parse_node(t));)
+              | let sg2  = if (is_empty(stack)): sgs else: fold(toks, sgs, fn(a, t): _mm_sg_add(a, last(stack), _mm_parse_node(t)["id"]);)
+              | let eg2  = fold(range(1, len(items) - 2, 2), eg_list, fn(acc, i):
+                  fold(items[i - 1]["nodes"], acc, fn(a, f):
+                    fold(items[i + 1]["nodes"], a, fn(b, t):
+                      b + [{"from": _mm_parse_node(f)["id"], "to": _mm_parse_node(t)["id"], "label": items[i]["label"], "op": items[i]["op"]}]
+                    ;)
+                  ;)
+                ;)
+              | [nd2, eg2, sg2, stack]
+            end
+      end
 end
 
 def _mm_parse_flowchart(lines, direction):
   var nd_list = []
   | var eg_list = []
+  | var sgs = []
+  | var stack = []
   | var i = 0
   | let n = len(lines)
   | let _ = while (i < n):
-      let r  = _mm_parse_flowchart_line(lines[i], nd_list, eg_list)
+      let r  = _mm_parse_flowchart_line(lines[i], nd_list, eg_list, sgs, stack)
       | nd_list = r[0]
       | eg_list = r[1]
+      | sgs = r[2]
+      | stack = r[3]
       | i += 1
       | nd_list
     end
-  | {"type": "flowchart", "direction": direction, "nodes": nd_list, "edges": eg_list}
+  | {"type": "flowchart", "direction": direction, "nodes": nd_list, "edges": eg_list, "subgraphs": sgs}
 end
 
 # ─── sequence diagram ─────────────────────────────────────────────────────────
@@ -136,9 +251,11 @@ def _mm_parse_seq_line(line, parts, msgs):
           else:
             [parts + [{"name": nm, "alias": al}], msgs]
       end
-    elif (is_regex_match(l, "^\\S+\\s*(->>|-->>|->|-->|-x|--x)\\s*\\S+\\s*:")):
+    elif (is_regex_match(l, "^[^\\-:,;>]+(?:-->>|->>|-->|->|--x|-x)[^:]+:")):
       do
-        let m    = capture(l, "^(?P<from>\\S+)\\s*(?P<arrow>->>|-->>|->|-->|-x|--x)\\s*(?P<to>[^:]+):\\s*(?P<text>.*)")
+        # Participant ids cannot contain - : , ; >, so the arrow starts at the first `-`
+        # (this also allows arrows written without spaces: `Alice->>Bob: Hi`).
+        let m    = capture(l, "^(?P<from>[^\\-:,;>]+)(?P<arrow>-->>|->>|-->|->|--x|-x)(?P<to>[^:]+):\\s*(?P<text>.*)")
         | let fr = trim(m["from"])
         | let to = trim(m["to"])
         | let msg = {"from": fr, "to": to, "arrow": m["arrow"], "text": trim(m["text"])}
@@ -240,13 +357,281 @@ def _mm_parse_class(lines):
   | {"type": "classDiagram", "classes": cls_list, "relations": rel_list}
 end
 
+# ─── state diagram ────────────────────────────────────────────────────────────
+
+# Adds a state when it is not known yet. `[*]` is the start / end marker, not a state.
+def _mm_state_touch(sts, id_):
+  if (id_ == "[*]" || any(sts, fn(s): s["id"] == id_;)):
+    sts
+  else:
+    sts + [{"id": id_, "label": id_}]
+end
+
+def _mm_state_set_label(sts, id_, label):
+  map(_mm_state_touch(sts, id_), fn(s): if (s["id"] == id_): {"id": id_, "label": label} else: s;)
+end
+
+def _mm_parse_state_line(line, sts, trs, dir):
+  let l = trim(line)
+  | if (is_regex_match(l, "^(\\[\\*\\]|[A-Za-z0-9_]+)\\s*-->\\s*(\\[\\*\\]|[A-Za-z0-9_]+)")):
+      do
+        let m   = capture(l, "^(?P<from>\\[\\*\\]|[A-Za-z0-9_]+)\\s*-->\\s*(?P<to>\\[\\*\\]|[A-Za-z0-9_]+)(?:\\s*:\\s*(?P<label>.*))?")
+        | let lbl = if (is_none(m["label"])): "" else: trim(m["label"])
+        | [_mm_state_touch(_mm_state_touch(sts, m["from"]), m["to"]), trs + [{"from": m["from"], "to": m["to"], "label": lbl}], dir]
+      end
+    elif (is_regex_match(l, "^state\\s+\"[^\"]*\"\\s+as\\s+[A-Za-z0-9_]+")):
+      do
+        let m = capture(l, "^state\\s+\"(?P<label>[^\"]*)\"\\s+as\\s+(?P<id>[A-Za-z0-9_]+)")
+        | [_mm_state_set_label(sts, m["id"], m["label"]), trs, dir]
+      end
+    elif (is_regex_match(l, "^state\\s+[A-Za-z0-9_]+")):
+      do
+        let m = capture(l, "^state\\s+(?P<id>[A-Za-z0-9_]+)")
+        | [_mm_state_touch(sts, m["id"]), trs, dir]
+      end
+    elif (is_regex_match(l, "^direction\\s+(LR|RL|TB|TD|BT)")):
+      do
+        let m = capture(l, "^direction\\s+(?P<dir>LR|RL|TB|TD|BT)")
+        | [sts, trs, m["dir"]]
+      end
+    elif (is_regex_match(l, "^[A-Za-z0-9_]+\\s*:\\s*\\S")):
+      do
+        let m = capture(l, "^(?P<id>[A-Za-z0-9_]+)\\s*:\\s*(?P<text>.+)")
+        | [_mm_state_set_label(sts, m["id"], trim(m["text"])), trs, dir]
+      end
+    else:
+      [sts, trs, dir]
+end
+
+# Composite states are flattened: their inner states and transitions join the diagram.
+def _mm_parse_state(lines):
+  var sts = []
+  | var trs = []
+  | var dir = "TD"
+  | var i = 0
+  | let n = len(lines)
+  | let _ = while (i < n):
+      let r = _mm_parse_state_line(lines[i], sts, trs, dir)
+      | sts = r[0]
+      | trs = r[1]
+      | dir = r[2]
+      | i += 1
+      | sts
+    end
+  | {"type": "stateDiagram", "direction": dir, "states": sts, "transitions": trs}
+end
+
+# ─── er diagram ───────────────────────────────────────────────────────────────
+
+def _mm_er_touch(ents, name_):
+  if (any(ents, fn(e): e["name"] == name_;)):
+    ents
+  else:
+    ents + [{"name": name_, "attributes": []}]
+end
+
+def _mm_er_add_attr(ents, name_, attr):
+  map(ents, fn(e): if (e["name"] == name_): {"name": name_, "attributes": e["attributes"] + [attr]} else: e;)
+end
+
+# `type name PK, FK "comment"`
+def _mm_er_attr(line):
+  let m = capture(line, "^(?P<type>\\S+)\\s+(?P<name>\\S+)(?:\\s+(?P<keys>(?:PK|FK|UK)(?:\\s*,\\s*(?:PK|FK|UK))*))?(?:\\s+\"(?P<comment>[^\"]*)\")?")
+  | {
+      "type": m["type"],
+      "name": m["name"],
+      "keys": if (is_none(m["keys"])): [] else: map(split(m["keys"], ","), fn(k): trim(k);),
+      "comment": if (is_none(m["comment"])): "" else: m["comment"]
+    }
+end
+
+def _mm_er_rel_re():
+  "^(?P<a>[A-Za-z0-9_\\-]+)\\s+(?P<l>\\|\\||\\|o|\\}o|\\}\\|)(?P<line>--|\\.\\.)(?P<r>\\|\\||o\\||o\\{|\\|\\{)\\s+(?P<b>[A-Za-z0-9_\\-]+)(?:\\s*:\\s*(?P<label>.*))?$"
+end
+
+def _mm_parse_er(lines):
+  var ents = []
+  | var rels = []
+  | var cur  = ""
+  | var i    = 0
+  | let n    = len(lines)
+  | let _ = while (i < n):
+      let l = trim(lines[i])
+      | if (cur != ""):
+          if (l == "}"):
+            cur = ""
+          elif (is_regex_match(l, "^\\S+\\s+\\S+")):
+            ents = _mm_er_add_attr(ents, cur, _mm_er_attr(l))
+          else:
+            cur
+        elif (is_regex_match(l, _mm_er_rel_re())):
+          do
+            let m   = capture(l, _mm_er_rel_re())
+            | let lbl = if (is_none(m["label"])): "" else: gsub(trim(m["label"]), "^\"|\"$", "")
+            | ents = _mm_er_touch(_mm_er_touch(ents, m["a"]), m["b"])
+            | rels += [{"from": m["a"], "to": m["b"], "left": m["l"], "line": m["line"], "right": m["r"], "label": lbl}]
+            | rels
+          end
+        elif (is_regex_match(l, "^[A-Za-z0-9_\\-]+\\s*\\{\\s*$")):
+          do
+            let m = capture(l, "^(?P<name>[A-Za-z0-9_\\-]+)\\s*\\{")
+            | ents = _mm_er_touch(ents, m["name"])
+            | cur = m["name"]
+            | cur
+          end
+        elif (is_regex_match(l, "^[A-Za-z0-9_\\-]+$")):
+          ents = _mm_er_touch(ents, l)
+        else:
+          ents
+      | i += 1
+      | ents
+    end
+  | {"type": "erDiagram", "entities": ents, "relations": rels}
+end
+
+# ─── gantt chart ──────────────────────────────────────────────────────────────
+
+# Days since 1970-01-01 for a proleptic Gregorian date.
+def _mm_days(y, m, d):
+  let yy  = if (m <= 2): y - 1 else: y
+  | let era = floor(yy / 400)
+  | let yoe = yy - (era * 400)
+  | let mp  = if (m > 2): m - 3 else: m + 9
+  | let doy = floor(((153 * mp) + 2) / 5) + d - 1
+  | let doe = (yoe * 365) + floor(yoe / 4) - floor(yoe / 100) + doy
+  | (era * 146097) + doe - 719468
+end
+
+# Inverse of _mm_days: [year, month, day].
+def _mm_civil(z):
+  let zz  = z + 719468
+  | let era = floor(zz / 146097)
+  | let doe = zz - (era * 146097)
+  | let yoe = floor((doe - floor(doe / 1460) + floor(doe / 36524) - floor(doe / 146096)) / 365)
+  | let doy = doe - ((365 * yoe) + floor(yoe / 4) - floor(yoe / 100))
+  | let mp  = floor(((5 * doy) + 2) / 153)
+  | let d   = doy - floor(((153 * mp) + 2) / 5) + 1
+  | let m   = if (mp < 10): mp + 3 else: mp - 9
+  | [yoe + (era * 400) + (if (m <= 2): 1 else: 0), m, d]
+end
+
+def _mm_pad2(n):
+  if (n < 10): "0" + to_string(n) else: to_string(n)
+end
+
+def _mm_date_str(z):
+  let c = _mm_civil(z)
+  | to_string(c[0]) + "-" + _mm_pad2(c[1]) + "-" + _mm_pad2(c[2])
+end
+
+# "YYYY-MM-DD" to days, or None.
+def _mm_date_days(s):
+  if (is_regex_match(s, "^\\d{4}-\\d{2}-\\d{2}$")):
+    do
+      let m = capture(s, "^(?P<y>\\d{4})-(?P<m>\\d{2})-(?P<d>\\d{2})$")
+      | _mm_days(to_number(m["y"]), to_number(m["m"]), to_number(m["d"]))
+    end
+  else:
+    None
+end
+
+def _mm_gantt_tags():
+  ["done", "active", "crit", "milestone"]
+end
+
+# Start of a task: a date, or `after <id>` (the end of that task). Returns days or None.
+def _mm_gantt_start(tok, ends):
+  if (is_regex_match(tok, "^after\\s+\\S+")):
+    do
+      let m = capture(tok, "^after\\s+(?P<id>\\S+)")
+      | ends[m["id"]]
+    end
+  else:
+    _mm_date_days(tok)
+end
+
+# End of a task: a date or a duration (`3d`, `2w`). Returns days or None.
+def _mm_gantt_end(tok, start):
+  if (is_regex_match(tok, "^\\d+(\\.\\d+)?[dw]$")):
+    do
+      let m = capture(tok, "^(?P<n>\\d+(?:\\.\\d+)?)(?P<u>[dw])$")
+      | start + round(to_number(m["n"]) * (if (m["u"] == "w"): 7 else: 1))
+    end
+  else:
+    _mm_date_days(tok)
+end
+
+# Returns the task dict, or None when the line does not describe a task.
+def _mm_gantt_task(name_, spec, prev_end, ends):
+  let toks = map(split(spec, ","), fn(t): trim(t);)
+  | let tags = filter(toks, fn(t): any(_mm_gantt_tags(), fn(k): k == t;);)
+  | let rest = filter(toks, fn(t): not(any(_mm_gantt_tags(), fn(k): k == t;));)
+  | let n    = len(rest)
+  | if (n == 0 || (n == 1 && is_none(prev_end))):
+      None
+    else:
+      do
+        let id_  = if (n >= 3): rest[0] else: ""
+        | let st = if (n == 1): prev_end elif (n == 2): _mm_gantt_start(rest[0], ends) else: _mm_gantt_start(rest[1], ends)
+        | let en = if (is_none(st)): None else: _mm_gantt_end(rest[n - 1], st)
+        | if (is_none(en)):
+            None
+          else:
+            {"name": trim(name_), "id": id_, "tags": tags, "start": _mm_date_str(st), "end": _mm_date_str(en)}
+      end
+end
+
+def _mm_parse_gantt(lines):
+  var title = ""
+  | var secs  = [{"name": "", "tasks": []}]
+  | var ends  = {}
+  | var prev  = None
+  | var i     = 0
+  | let n     = len(lines)
+  | let _ = while (i < n):
+      let l = trim(lines[i])
+      | if (is_regex_match(l, "(?i)^title\\s+")):
+          title = trim(capture(l, "(?i)^title\\s+(?P<t>.+)")["t"])
+        elif (is_regex_match(l, "(?i)^section\\s+")):
+          secs = secs + [{"name": trim(capture(l, "(?i)^section\\s+(?P<t>.+)")["t"]), "tasks": []}]
+        elif (is_regex_match(l, "(?i)^(dateFormat|axisFormat|excludes|includes|todayMarker|tickInterval|weekday|weekend|accTitle|accDescr)\\b")):
+          title
+        elif (is_regex_match(l, "^[^:]+:.+$")):
+          do
+            let m = capture(l, "^(?P<name>[^:]+):(?P<spec>.+)$")
+            | let t = _mm_gantt_task(m["name"], m["spec"], prev, ends)
+            | if (is_none(t)):
+                title
+              else:
+                do
+                  let last = len(secs) - 1
+                  | secs = slice(secs, 0, last) + [{"name": secs[last]["name"], "tasks": secs[last]["tasks"] + [t]}]
+                  | prev = _mm_date_days(t["end"])
+                  | ends = if (t["id"] == ""): ends else: _mm_dset(ends, t["id"], prev)
+                  | title
+                end
+          end
+        else:
+          title
+      | i += 1
+      | title
+    end
+  | {"type": "gantt", "title": title, "sections": filter(secs, fn(s): s["name"] != "" || not(is_empty(s["tasks"]));)}
+end
+
 # ─── serialization helpers ────────────────────────────────────────────────────
 
 def _mm_node_syntax(nd):
   let nd_id    = nd["id"]
   | let nd_label = nd["label"]
   | let nd_shape = nd["shape"]
-  | if (nd_shape == "circle"):
+  | if (nd_shape == "cylinder"):
+      nd_id + "[(" + nd_label + ")]"
+    elif (nd_shape == "subroutine"):
+      nd_id + "[[" + nd_label + "]]"
+    elif (nd_shape == "hexagon"):
+      nd_id + "{{" + nd_label + "}}"
+    elif (nd_shape == "circle"):
       nd_id + "((" + nd_label + "))"
     elif (nd_shape == "stadium"):
       nd_id + "([" + nd_label + "])"
@@ -263,21 +648,29 @@ end
 def _mm_edge_line(eg, nd_list):
   let fn_ = first(filter(nd_list, fn(n): n["id"] == eg["from"];))
   | let tn  = first(filter(nd_list, fn(n): n["id"] == eg["to"];))
-  | let fs  = _mm_node_syntax(fn_)
-  | let ts  = _mm_node_syntax(tn)
-  | if (len(eg["label"]) > 0):
-      "  " + fs + " -->|" + eg["label"] + "| " + ts
-    else:
-      "  " + fs + " --> " + ts
+  | let op  = if (is_none(eg["op"])): "-->" else: eg["op"]
+  | "  " + _mm_node_syntax(fn_) + " " + op + (if (len(eg["label"]) > 0): "|" + eg["label"] + "|" else: "") + " " + _mm_node_syntax(tn)
+end
+
+def _mm_sg_lines(sgs, parent, indent, nd_list):
+  fold(filter(sgs, fn(g): g["parent"] == parent;), [], fn(acc, g):
+    acc
+    + [indent + "subgraph " + g["id"] + " [" + g["title"] + "]"]
+    + map(g["nodes"], fn(id): indent + "  " + _mm_node_syntax(first(filter(nd_list, fn(n): n["id"] == id;)));)
+    + _mm_sg_lines(sgs, g["id"], indent + "  ", nd_list)
+    + [indent + "end"]
+  ;)
 end
 
 def _mm_flowchart_stringify(d):
   let nd_list  = d["nodes"]
   | let eg_list  = d["edges"]
+  | let sgs      = if (is_none(d["subgraphs"])): [] else: d["subgraphs"]
   | let diag_dir = d["direction"]
   | let eg_ids   = fold(eg_list, [], fn(acc, e): acc + [e["from"], e["to"]];)
-  | let standalone = filter(nd_list, fn(n): not(any(eg_ids, fn(k): k == n["id"];));)
+  | let standalone = filter(nd_list, fn(n): not(any(eg_ids, fn(k): k == n["id"];)) && not(_mm_sg_member(sgs, n["id"]));)
   | let lines = ["graph " + diag_dir]
+               + _mm_sg_lines(sgs, "", "  ", nd_list)
                + map(eg_list, fn(e): _mm_edge_line(e, nd_list);)
                + map(standalone, fn(n): "  " + _mm_node_syntax(n);)
   | join(lines, "\n")
@@ -321,24 +714,972 @@ def _mm_class_stringify(d):
   | join(["classDiagram"] + c_lines + r_lines, "\n")
 end
 
+def _mm_state_stringify(d):
+  let sts = d["states"]
+  | let trs = d["transitions"]
+  | let used = fold(trs, [], fn(acc, t): acc + [t["from"], t["to"]];)
+  | let dir_lines = if (d["direction"] == "TD"): [] else: ["  direction " + d["direction"]]
+  | let l_lines = map(filter(sts, fn(s): s["label"] != s["id"];), fn(s): "  state \"" + s["label"] + "\" as " + s["id"];)
+  | let t_lines = map(trs, fn(t):
+      if (len(t["label"]) > 0):
+        "  " + t["from"] + " --> " + t["to"] + " : " + t["label"]
+      else:
+        "  " + t["from"] + " --> " + t["to"]
+    ;)
+  | let alone = map(filter(sts, fn(s): s["label"] == s["id"] && not(any(used, fn(k): k == s["id"];));), fn(s): "  state " + s["id"];)
+  | join(["stateDiagram-v2"] + dir_lines + l_lines + t_lines + alone, "\n")
+end
+
+def _mm_er_attr_line(a):
+  let keys = if (is_empty(a["keys"])): "" else: " " + join(a["keys"], ", ")
+  | let cm = if (len(a["comment"]) > 0): " \"" + a["comment"] + "\"" else: ""
+  | "    " + a["type"] + " " + a["name"] + keys + cm
+end
+
+def _mm_er_stringify(d):
+  let ents = d["entities"]
+  | let rels = d["relations"]
+  | let used = fold(rels, [], fn(acc, r): acc + [r["from"], r["to"]];)
+  | let r_lines = map(rels, fn(r):
+      "  " + r["from"] + " " + r["left"] + r["line"] + r["right"] + " " + r["to"]
+      + (if (len(r["label"]) > 0): " : " + (if (contains(r["label"], " ")): "\"" + r["label"] + "\"" else: r["label"]) else: "")
+    ;)
+  | let e_lines = fold(filter(ents, fn(e): not(is_empty(e["attributes"]));), [], fn(acc, e):
+      acc + ["  " + e["name"] + " {"] + map(e["attributes"], fn(a): _mm_er_attr_line(a);) + ["  }"]
+    ;)
+  | let alone = map(filter(ents, fn(e): is_empty(e["attributes"]) && not(any(used, fn(k): k == e["name"];));), fn(e): "  " + e["name"];)
+  | join(["erDiagram"] + r_lines + e_lines + alone, "\n")
+end
+
+def _mm_gantt_stringify(d):
+  let lines = fold(d["sections"], [], fn(acc, sec):
+      acc
+      + (if (sec["name"] == ""): [] else: ["  section " + sec["name"]])
+      + map(sec["tasks"], fn(t):
+          do
+            let spec = t["tags"] + (if (t["id"] == ""): [] else: [t["id"]]) + [t["start"], t["end"]]
+            | "  " + t["name"] + " : " + join(spec, ", ")
+          end
+        ;)
+    ;)
+  | join(["gantt", "  dateFormat YYYY-MM-DD"] + (if (len(d["title"]) > 0): ["  title " + d["title"]] else: []) + lines, "\n")
+end
+
+# ─── svg helpers ──────────────────────────────────────────────────────────────
+
+def _mm_n(x):
+  to_string(round(x * 10) / 10)
+end
+
+def _mm_esc(s):
+  gsub(gsub(gsub(gsub(to_string(s), "&", "&amp;"), "<", "&lt;"), ">", "&gt;"), "\"", "&quot;")
+end
+
+def _mm_dset(d, k, v):
+  var c = d | c[k] = v | c
+end
+
+# Approximate rendered text width (wide characters count double).
+def _mm_text_w(s):
+  let t     = to_string(s)
+  | let asc = len(gsub(t, "[^\\x00-\\x7F]", ""))
+  | (asc * 7.5) + ((len(t) - asc) * 14)
+end
+
+def _mm_text_start(x, y, s, extra):
+  "<text x=\"" + _mm_n(x) + "\" y=\"" + _mm_n(y) + "\" dy=\"0.35em\" class=\"mm-text\"" + extra + ">" + _mm_esc(s) + "</text>"
+end
+
+def _mm_text(x, y, s, extra):
+  "<text x=\"" + _mm_n(x) + "\" y=\"" + _mm_n(y) + "\" dy=\"0.35em\" text-anchor=\"middle\" class=\"mm-text\"" + extra + ">" + _mm_esc(s) + "</text>"
+end
+
+# Text with a background-colored outline so it stays readable on top of a slice.
+def _mm_text_halo(x, y, s):
+  "<text x=\"" + _mm_n(x) + "\" y=\"" + _mm_n(y) + "\" dy=\"0.35em\" text-anchor=\"middle\" class=\"mm-text mm-halo\" stroke-width=\"3\" paint-order=\"stroke\">" + _mm_esc(s) + "</text>"
+end
+
+def _mm_svg_open(w, h):
+  "<svg xmlns=\"http://www.w3.org/2000/svg\" class=\"mm-theme-slot\" viewBox=\"0 0 " + _mm_n(w) + " " + _mm_n(h) + "\" width=\"" + _mm_n(w) + "\" height=\"" + _mm_n(h) + "\" font-family=\"trebuchet ms, verdana, arial, sans-serif\" font-size=\"14\">\n<!--mm-style-->\n<rect width=\"100%\" height=\"100%\" class=\"mm-bg\"/>"
+end
+
+def _mm_marker_defs():
+  join([
+    "<defs>",
+    "<marker id=\"mm-arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerUnits=\"userSpaceOnUse\" markerWidth=\"12\" markerHeight=\"12\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" class=\"mm-mfill\"/></marker>",
+    "<marker id=\"mm-circle\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" markerUnits=\"userSpaceOnUse\" markerWidth=\"13\" markerHeight=\"13\" orient=\"auto\"><circle cx=\"5\" cy=\"5\" r=\"4\" class=\"mm-mhollow\"/></marker>",
+    "<marker id=\"mm-cross\" viewBox=\"0 0 10 10\" refX=\"10\" refY=\"5\" markerUnits=\"userSpaceOnUse\" markerWidth=\"14\" markerHeight=\"14\" orient=\"auto\"><path d=\"M 1 1 L 9 9 M 9 1 L 1 9\" class=\"mm-mline\" stroke-width=\"1.5\"/></marker>",
+    "<marker id=\"mm-tri\" viewBox=\"0 0 12 12\" refX=\"11\" refY=\"6\" markerUnits=\"userSpaceOnUse\" markerWidth=\"16\" markerHeight=\"16\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 11 6 L 0 12 z\" class=\"mm-mhollow\"/></marker>",
+    "<marker id=\"mm-dia\" viewBox=\"0 0 14 10\" refX=\"13\" refY=\"5\" markerUnits=\"userSpaceOnUse\" markerWidth=\"20\" markerHeight=\"15\" orient=\"auto-start-reverse\"><path d=\"M 0 5 L 6.5 0 L 13 5 L 6.5 10 z\" class=\"mm-mfill\"/></marker>",
+    "<marker id=\"mm-odia\" viewBox=\"0 0 14 10\" refX=\"13\" refY=\"5\" markerUnits=\"userSpaceOnUse\" markerWidth=\"20\" markerHeight=\"15\" orient=\"auto-start-reverse\"><path d=\"M 0 5 L 6.5 0 L 13 5 L 6.5 10 z\" class=\"mm-mhollow\"/></marker>",
+    "</defs>"
+  ], "\n")
+end
+
+# ─── flowchart layout (also used for class diagrams) ──────────────────────────
+
+def _mm_node_size(nd):
+  if (!is_none(nd["size"])): nd["size"] else: _mm_node_size_by_shape(nd)
+end
+
+def _mm_node_size_by_shape(nd):
+  let tw = _mm_text_w(nd["label"])
+  | let shape = nd["shape"]
+  | if (shape == "start" || shape == "end"):
+      [20, 20]
+    elif (shape == "diamond"):
+      [max((tw * 1.5) + 20, 80), 60]
+    elif (shape == "cylinder"):
+      [max(tw + 32, 60), 52]
+    elif (shape == "hexagon"):
+      [max(tw + 56, 80), 44]
+    elif (shape == "circle"):
+      do
+        let d = max(tw + 24, 50)
+        | [d, d]
+      end
+    else:
+      [max(tw + 32, 60), 40]
+end
+
+# Layered ranking. Edges pointing back to an earlier-declared node are ignored
+# so that cycles never prevent the ranking from converging.
+def _mm_ranks(nds, edges):
+  let ids = map(nds, fn(n): n["id"];)
+  | let idx = if (is_empty(ids)):
+      {}
+    else:
+      fold(range(0, len(ids) - 1, 1), {}, fn(acc, i): _mm_dset(acc, ids[i], i);)
+  | let fwd   = filter(edges, fn(e): idx[e["from"]] < idx[e["to"]];)
+  | let rank0 = fold(ids, {}, fn(acc, id): _mm_dset(acc, id, 0);)
+  | fold(range(0, len(ids), 1), rank0, fn(r, _p):
+      fold(fwd, r, fn(acc, e):
+        if (acc[e["from"]] + 1 > acc[e["to"]]):
+          _mm_dset(acc, e["to"], acc[e["from"]] + 1)
+        else:
+          acc
+      ;)
+    ;)
+end
+
+# Returns { pos: { id: {x, y, w, h, shape} }, width, height } (x/y are centers).
+def _mm_flow_layout(nds, edges, dir, extra):
+  let horiz    = dir == "LR" || dir == "RL"
+  | let rev    = dir == "RL" || dir == "BT"
+  | let pad    = 40 + extra
+  | let m_gap  = (if (horiz): 80 else: 60) + extra
+  | let c_gap  = 40 + extra
+  | let rank   = _mm_ranks(nds, edges)
+  | let max_rk = fold(nds, 0, fn(m, nd): max(m, rank[nd["id"]]);)
+  | let keyed  = any(nds, fn(nd): !is_none(nd["key"]);)
+  | let layers = map(range(0, max_rk, 1), fn(r):
+      let l = filter(nds, fn(nd): rank[nd["id"]] == r;)
+      | if (keyed): sort_by(l, fn(nd): nd["key"];) else: l
+    ;)
+  | let sizes  = fold(nds, {}, fn(acc, nd): _mm_dset(acc, nd["id"], _mm_node_size(nd));)
+  | let main_of  = fn(id): if (horiz): sizes[id][0] else: sizes[id][1];
+  | let cross_of = fn(id): if (horiz): sizes[id][1] else: sizes[id][0];
+  | let l_cross = map(layers, fn(l):
+      fold(l, 0, fn(a, nd): a + cross_of(nd["id"]);) + (c_gap * max(len(l) - 1, 0))
+    ;)
+  | let l_main = map(layers, fn(l): fold(l, 0, fn(a, nd): max(a, main_of(nd["id"])););)
+  | let max_cross  = fold(l_cross, 0, fn(a, c): max(a, c);)
+  | let total_main = fold(l_main, 0, fn(a, m): a + m;) + (m_gap * (len(layers) - 1))
+  | var pos      = {}
+  | var main_off = pad
+  | var li       = 0
+  | let _ = while (li < len(layers)):
+      let layer = layers[li]
+      | let lm  = l_main[li]
+      | var cross_off = pad + ((max_cross - l_cross[li]) / 2)
+      | var k = 0
+      | let _2 = while (k < len(layer)):
+          let nd = layer[k]
+          | let id = nd["id"]
+          | let mc = main_off + (lm / 2)
+          | let m_pos = if (rev): (total_main + (pad * 2)) - mc else: mc
+          | let c_pos = cross_off + (cross_of(id) / 2)
+          | pos[id] = {
+              "x": if (horiz): m_pos else: c_pos,
+              "y": if (horiz): c_pos else: m_pos,
+              "w": sizes[id][0],
+              "h": sizes[id][1],
+              "shape": nd["shape"]
+            }
+          | cross_off += cross_of(id) + c_gap
+          | k += 1
+          | pos
+        end
+      | main_off += lm + m_gap
+      | li += 1
+      | pos
+    end
+  | let m_total = total_main + (pad * 2)
+  | let c_total = max_cross + (pad * 2)
+  | {
+      "pos": pos,
+      "width": if (horiz): m_total else: c_total,
+      "height": if (horiz): c_total else: m_total
+    }
+end
+
+# Fraction t of the center-to-target vector at which the node boundary is hit.
+def _mm_clip(shape, dx, dy, hw, hh):
+  let ax = abs(dx) / hw
+  | let ay = abs(dy) / hh
+  | if (shape == "diamond"):
+      1 / max(ax + ay, 0.0001)
+    elif (shape == "circle" || shape == "start" || shape == "end"):
+      1 / max(sqrt((ax * ax) + (ay * ay)), 0.0001)
+    else:
+      1 / max(max(ax, ay), 0.0001)
+end
+
+# Returns [x1, y1, x2, y2] for a straight edge clipped to both node boundaries.
+def _mm_edge_points(a, b):
+  let dx = b["x"] - a["x"]
+  | let dy = b["y"] - a["y"]
+  | let ta = _mm_clip(a["shape"], dx, dy, a["w"] / 2, a["h"] / 2)
+  | let tb = _mm_clip(b["shape"], dx, dy, b["w"] / 2, b["h"] / 2)
+  | [a["x"] + (dx * ta), a["y"] + (dy * ta), b["x"] - (dx * tb), b["y"] - (dy * tb)]
+end
+
+def _mm_node_svg(nd, p):
+  let x = p["x"]
+  | let y = p["y"]
+  | let w = p["w"]
+  | let h = p["h"]
+  | if (nd["shape"] == "start"):
+      "<circle cx=\"" + _mm_n(x) + "\" cy=\"" + _mm_n(y) + "\" r=\"9\" class=\"mm-solid\"/>"
+    elif (nd["shape"] == "end"):
+      "<circle cx=\"" + _mm_n(x) + "\" cy=\"" + _mm_n(y) + "\" r=\"9\" class=\"mm-edge\"/>\n<circle cx=\"" + _mm_n(x) + "\" cy=\"" + _mm_n(y) + "\" r=\"5\" class=\"mm-solid\"/>"
+    else:
+      _mm_shape_svg(nd, x, y, w, h)
+end
+
+def _mm_shape_svg(nd, x, y, w, h):
+  let style = " class=\"mm-node\""
+  | let body = if (nd["shape"] == "diamond"):
+      "<polygon points=\"" + _mm_n(x) + "," + _mm_n(y - (h / 2)) + " " + _mm_n(x + (w / 2)) + "," + _mm_n(y) + " " + _mm_n(x) + "," + _mm_n(y + (h / 2)) + " " + _mm_n(x - (w / 2)) + "," + _mm_n(y) + "\"" + style + "/>"
+    elif (nd["shape"] == "circle"):
+      "<circle cx=\"" + _mm_n(x) + "\" cy=\"" + _mm_n(y) + "\" r=\"" + _mm_n(w / 2) + "\"" + style + "/>"
+    elif (nd["shape"] == "cylinder"):
+      do
+        let x0 = x - (w / 2)
+        | let y0 = y - (h / 2)
+        | let rx = w / 2
+        | "<path d=\"M " + _mm_n(x0) + " " + _mm_n(y0 + 8) + " A " + _mm_n(rx) + " 8 0 0 1 " + _mm_n(x0 + w) + " " + _mm_n(y0 + 8) + " L " + _mm_n(x0 + w) + " " + _mm_n(y0 + h - 8) + " A " + _mm_n(rx) + " 8 0 0 1 " + _mm_n(x0) + " " + _mm_n(y0 + h - 8) + " Z M " + _mm_n(x0) + " " + _mm_n(y0 + 8) + " A " + _mm_n(rx) + " 8 0 0 0 " + _mm_n(x0 + w) + " " + _mm_n(y0 + 8) + "\"" + style + "/>"
+      end
+    elif (nd["shape"] == "hexagon"):
+      do
+        let x0 = x - (w / 2)
+        | let y0 = y - (h / 2)
+        | "<polygon points=\"" + _mm_n(x0 + 14) + "," + _mm_n(y0) + " " + _mm_n(x0 + w - 14) + "," + _mm_n(y0) + " " + _mm_n(x0 + w) + "," + _mm_n(y) + " " + _mm_n(x0 + w - 14) + "," + _mm_n(y0 + h) + " " + _mm_n(x0 + 14) + "," + _mm_n(y0 + h) + " " + _mm_n(x0) + "," + _mm_n(y) + "\"" + style + "/>"
+      end
+    elif (nd["shape"] == "subroutine"):
+      do
+        let x0 = x - (w / 2)
+        | let y0 = y - (h / 2)
+        | "<rect x=\"" + _mm_n(x0) + "\" y=\"" + _mm_n(y0) + "\" width=\"" + _mm_n(w) + "\" height=\"" + _mm_n(h) + "\" rx=\"3\"" + style + "/>\n<path d=\"M " + _mm_n(x0 + 8) + " " + _mm_n(y0) + " L " + _mm_n(x0 + 8) + " " + _mm_n(y0 + h) + " M " + _mm_n(x0 + w - 8) + " " + _mm_n(y0) + " L " + _mm_n(x0 + w - 8) + " " + _mm_n(y0 + h) + "\" class=\"mm-edge\"/>"
+      end
+    else:
+      do
+        let rx = if (nd["shape"] == "stadium"): h / 2 elif (nd["shape"] == "round"): 10 else: 3
+        | "<rect x=\"" + _mm_n(x - (w / 2)) + "\" y=\"" + _mm_n(y - (h / 2)) + "\" width=\"" + _mm_n(w) + "\" height=\"" + _mm_n(h) + "\" rx=\"" + _mm_n(rx) + "\"" + style + "/>"
+      end
+  | body + "\n" + _mm_text(x, y, nd["label"], "")
+end
+
+# Draws a line/loop; returns [shape_svg, label_svg].
+# Point of the quadratic curve p0 -> c -> p2 at t.
+def _mm_quad(q, t):
+  let u = 1 - t
+  | [(u * u * q[0]) + (2 * u * t * q[2]) + (t * t * q[4]), (u * u * q[1]) + (2 * u * t * q[3]) + (t * t * q[5])]
+end
+
+# True when a point lies inside the (slightly grown) box of a node other than the two ends.
+def _mm_hits_node(pt, pos, a_id, b_id):
+  any(keys(pos), fn(id):
+    if (id == a_id || id == b_id):
+      false
+    else:
+      do
+        let n = pos[id]
+        | abs(pt[0] - n["x"]) < ((n["w"] / 2) + 6) && abs(pt[1] - n["y"]) < ((n["h"] / 2) + 6)
+      end
+  ;)
+end
+
+# [p0x, p0y, cx, cy, p2x, p2y] of a curve bowing out of the way, or None when the straight
+# edge crosses no other node (or no detour is free).
+def _mm_detour(a, b, a_id, b_id, pos):
+  let q = _mm_edge_points(a, b)
+  | let samples = map(range(1, 19, 1), fn(i): [q[0] + ((q[2] - q[0]) * i / 20), q[1] + ((q[3] - q[1]) * i / 20)];)
+  | if (not(any(samples, fn(pt): _mm_hits_node(pt, pos, a_id, b_id);))):
+      None
+    else:
+      do
+        let dx  = b["x"] - a["x"]
+        | let dy  = b["y"] - a["y"]
+        | let ln  = max(sqrt((dx * dx) + (dy * dy)), 0.0001)
+        | let mx  = (a["x"] + b["x"]) / 2
+        | let my  = (a["y"] + b["y"]) / 2
+        | let tries = map([90, 0 - 90, 160, 0 - 160, 240, 0 - 240], fn(off):
+            do
+              let cx = mx + ((0 - dy) / ln * off)
+              | let cy = my + (dx / ln * off)
+              | let pa = _mm_edge_points(a, {"x": cx, "y": cy, "w": 0.002, "h": 0.002, "shape": "rect"})
+              | let pb = _mm_edge_points({"x": cx, "y": cy, "w": 0.002, "h": 0.002, "shape": "rect"}, b)
+              | [pa[0], pa[1], cx, cy, pb[2], pb[3]]
+            end
+          ;)
+        | let free = filter(tries, fn(c): not(any(map(range(1, 9, 1), fn(i): _mm_quad(c, i / 10);), fn(pt): _mm_hits_node(pt, pos, a_id, b_id);));)
+        | if (is_empty(free)): None else: first(free)
+      end
+end
+
+# Draws a line, curve or loop; returns [shape_svg, label_svg].
+# Edges whose reverse edge also exists are shifted sideways so both stay visible.
+def _mm_edge_svg(e, egs, pos, line_extra):
+  let a = pos[e["from"]]
+  | let b = pos[e["to"]]
+  | let lbl = e["label"]
+  | let stroke = " class=\"mm-edge\""
+  | let lw = _mm_text_w(lbl) + 10
+  | let label_at = fn(mx, my):
+      if (len(lbl) > 0):
+        "<rect x=\"" + _mm_n(mx - (lw / 2)) + "\" y=\"" + _mm_n(my - 10) + "\" width=\"" + _mm_n(lw) + "\" height=\"20\" class=\"mm-label-bg\"/>\n" + _mm_text(mx, my, lbl, "")
+      else:
+        ""
+    ;
+  | if (e["from"] == e["to"]):
+      do
+        let rx = a["x"] + (a["w"] / 2)
+        | let path = "<path d=\"M " + _mm_n(rx) + " " + _mm_n(a["y"] - 8) + " C " + _mm_n(rx + 40) + " " + _mm_n(a["y"] - 30) + ", " + _mm_n(rx + 40) + " " + _mm_n(a["y"] + 30) + ", " + _mm_n(rx) + " " + _mm_n(a["y"] + 8) + "\"" + stroke + line_extra + "/>"
+        | [path, if (len(lbl) > 0): _mm_text(rx + 46 + (_mm_text_w(lbl) / 2), a["y"], lbl, "") else: ""]
+      end
+    else:
+      do
+        let c = _mm_detour(a, b, e["from"], e["to"], pos)
+        | if (!is_none(c)):
+            do
+              let mid = _mm_quad(c, 0.5)
+              | ["<path d=\"M " + _mm_n(c[0]) + " " + _mm_n(c[1]) + " Q " + _mm_n(c[2]) + " " + _mm_n(c[3]) + " " + _mm_n(c[4]) + " " + _mm_n(c[5]) + "\"" + stroke + line_extra + "/>", label_at(mid[0], mid[1])]
+            end
+          else:
+            do
+              let q  = _mm_edge_points(a, b)
+              | let len_ = max(sqrt(pow(q[2] - q[0], 2) + pow(q[3] - q[1], 2)), 0.0001)
+              | let off  = if (any(egs, fn(o): o["from"] == e["to"] && o["to"] == e["from"];)): 6 else: 0
+              | let ox   = (0 - (q[3] - q[1])) / len_ * off
+              | let oy   = (q[2] - q[0]) / len_ * off
+              | let p    = [q[0] + ox, q[1] + oy, q[2] + ox, q[3] + oy]
+              | let line = "<line x1=\"" + _mm_n(p[0]) + "\" y1=\"" + _mm_n(p[1]) + "\" x2=\"" + _mm_n(p[2]) + "\" y2=\"" + _mm_n(p[3]) + "\"" + stroke + line_extra + "/>"
+              # With a reverse edge the label sits beside its own line, away from the other label.
+              | let sh = if (off == 0): 0 else: off + ((lw / 2) * abs(ox / off)) + (10 * abs(oy / off))
+              | let mx = ((q[0] + q[2]) / 2) + (if (off == 0): 0 else: (ox / off) * sh)
+              | let my = ((q[1] + q[3]) / 2) + (if (off == 0): 0 else: (oy / off) * sh)
+              | [line, label_at(mx, my)]
+            end
+      end
+end
+
+# Joins non-empty strings with newlines (keeps the SVG free of blank lines).
+def _mm_join(parts):
+  join(filter(parts, fn(s): len(s) > 0;), "\n")
+end
+
+# ─── flowchart renderer ───────────────────────────────────────────────────────
+
+# Markers, dash and width for a link operator (`-->`, `---`, `==>`, `-.->`, `<-->`, `--x`, `--o`).
+def _mm_op_style(op):
+  let o = if (is_none(op)): "-->" else: op
+  | let head = if (o == "-->" || o == "==>" || o == "-.->" || o == "<-->"): " marker-end=\"url(#mm-arrow)\""
+      elif (o == "--x"): " marker-end=\"url(#mm-cross)\""
+      elif (o == "--o"): " marker-end=\"url(#mm-circle)\""
+      else: ""
+  | let tail = if (o == "<-->"): " marker-start=\"url(#mm-arrow)\"" else: ""
+  | let wide = if (o == "==>" || o == "==="): " style=\"stroke-width:3.5\"" else: ""
+  | let dash = if (o == "-.->" || o == "-.-"): " stroke-dasharray=\"2 4\"" else: ""
+  | head + tail + wide + dash
+end
+
+def _mm_sg_kids(sgs, id):
+  filter(sgs, fn(g): g["parent"] == id;)
+end
+
+# 0 for a subgraph without nested subgraphs, otherwise one more than its deepest child.
+def _mm_sg_height(sgs, id):
+  let kids = _mm_sg_kids(sgs, id)
+  | if (is_empty(kids)): 0 else: 1 + fold(kids, 0, fn(m, g): max(m, _mm_sg_height(sgs, g["id"]));)
+end
+
+# Node ids of a subgraph and of everything nested in it.
+def _mm_sg_nodes(sgs, id):
+  let g = first(filter(sgs, fn(x): x["id"] == id;))
+  | fold(_mm_sg_kids(sgs, id), g["nodes"], fn(acc, k): acc + _mm_sg_nodes(sgs, k["id"]);)
+end
+
+def _mm_sg_rect(g, sgs, pos):
+  let ids = filter(_mm_sg_nodes(sgs, g["id"]), fn(id): !is_none(pos[id]);)
+  | if (is_empty(ids)):
+      ""
+    else:
+      do
+        let h   = _mm_sg_height(sgs, g["id"])
+        | let pad = 14 + (14 * h)
+        | let x0  = fold(ids, 1000000, fn(m, id): min(m, pos[id]["x"] - (pos[id]["w"] / 2));) - pad
+        | let x1  = fold(ids, 0 - 1000000, fn(m, id): max(m, pos[id]["x"] + (pos[id]["w"] / 2));) + pad
+        | let y0  = fold(ids, 1000000, fn(m, id): min(m, pos[id]["y"] - (pos[id]["h"] / 2));) - pad - 18
+        | let y1  = fold(ids, 0 - 1000000, fn(m, id): max(m, pos[id]["y"] + (pos[id]["h"] / 2));) + pad
+        | let need = _mm_text_w(g["title"]) + 24
+        | let cx  = (x0 + x1) / 2
+        | let w   = max(x1 - x0, need)
+        | "<rect x=\"" + _mm_n(cx - (w / 2)) + "\" y=\"" + _mm_n(y0) + "\" width=\"" + _mm_n(w) + "\" height=\"" + _mm_n(y1 - y0) + "\" rx=\"4\" class=\"mm-group\"/>\n" + _mm_text_start(cx - (w / 2) + 10, y0 + 13, g["title"], " font-size=\"13\"")
+      end
+end
+
+def _mm_flow_svg(d):
+  let nds  = d["nodes"]
+  | let edges = d["edges"]
+  | let sgs   = if (is_none(d["subgraphs"])): [] else: d["subgraphs"]
+  | let tops  = fold(sgs, 0, fn(m, g): max(m, _mm_sg_height(sgs, g["id"]));)
+  | let extra = if (is_empty(sgs)): 0 else: 30 + (14 * tops)
+  | let keyed = if (is_empty(sgs)): nds else: map(range(0, len(nds) - 1, 1), fn(i):
+      do
+        let nd = nds[i]
+        | let gi = fold(range(0, len(sgs) - 1, 1), 0 - 1, fn(m, j): if (any(sgs[j]["nodes"], fn(k): k == nd["id"];)): j else: m;)
+        | {"id": nd["id"], "label": nd["label"], "shape": nd["shape"], "key": ((gi + 1) * 10000) + i}
+      end
+    ;)
+  | let lay   = _mm_flow_layout(keyed, edges, d["direction"], extra)
+  | let pos   = lay["pos"]
+  | let drawn = map(edges, fn(e): _mm_edge_svg(e, edges, pos, _mm_op_style(e["op"]));)
+  | let groups = sort_by(sgs, fn(g): 0 - _mm_sg_height(sgs, g["id"]);)
+  | _mm_join(
+      [_mm_svg_open(lay["width"], lay["height"]), _mm_marker_defs()]
+      + map(groups, fn(g): _mm_sg_rect(g, sgs, pos);)
+      + map(drawn, fn(r): r[0];)
+      + map(nds, fn(nd): _mm_node_svg(nd, pos[nd["id"]]);)
+      + map(drawn, fn(r): r[1];)
+      + ["</svg>"]
+    )
+end
+
+# ─── sequence renderer ────────────────────────────────────────────────────────
+
+def _mm_seq_svg(d):
+  let parts   = d["participants"]
+  | let msgs  = d["messages"]
+  | let n     = len(parts)
+  | let idx   = if (n == 0): {} else: fold(range(0, n - 1, 1), {}, fn(acc, i): _mm_dset(acc, parts[i]["name"], i);)
+  | let pad   = 30
+  | let box_h = 40
+  | let box_w = fold(parts, 100, fn(m, p): max(m, _mm_text_w(p["alias"]) + 30);)
+  | let need  = fold(msgs, 0, fn(m, msg):
+      let span = abs(idx[msg["from"]] - idx[msg["to"]])
+      | if (span == 0): m else: max(m, (_mm_text_w(msg["text"]) + 40) / span)
+    ;)
+  | let gap   = max(box_w + 30, need)
+  | let selfs = filter(msgs, fn(m): m["from"] == m["to"];)
+  | let extra = fold(selfs, 0, fn(m, msg): max(m, _mm_text_w(msg["text"]) - (box_w / 2) + 80);)
+  | let width = (pad * 2) + box_w + (gap * max(n - 1, 0)) + max(extra, 0)
+  | let cx    = fn(i): pad + (box_w / 2) + (gap * i);
+  | let row_y = fn(i): pad + box_h + 40 + (i * 50);
+  | let bottom = pad + box_h + 40 + (len(msgs) * 50)
+  | let height = bottom + 20 + box_h + pad
+  | let boxes = fn(y): map(range(0, n - 1, 1), fn(i):
+      if (n == 0):
+        ""
+      else:
+        "<rect x=\"" + _mm_n(cx(i) - (box_w / 2)) + "\" y=\"" + _mm_n(y) + "\" width=\"" + _mm_n(box_w) + "\" height=\"" + _mm_n(box_h) + "\" rx=\"3\" class=\"mm-node\"/>\n" + _mm_text(cx(i), y + (box_h / 2), parts[i]["alias"], "")
+    ;);
+  | let lifelines = if (n == 0): [] else: map(range(0, n - 1, 1), fn(i):
+      "<line x1=\"" + _mm_n(cx(i)) + "\" y1=\"" + _mm_n(pad + box_h) + "\" x2=\"" + _mm_n(cx(i)) + "\" y2=\"" + _mm_n(bottom + 20) + "\" class=\"mm-life\"/>"
+    ;)
+  | let msg_svgs = if (is_empty(msgs)): [] else: map(range(0, len(msgs) - 1, 1), fn(i):
+      do
+        let m  = msgs[i]
+        | let y  = row_y(i)
+        | let x1 = cx(idx[m["from"]])
+        | let x2 = cx(idx[m["to"]])
+        | let arrow = m["arrow"]
+        | let dash  = if (starts_with(arrow, "--")): " stroke-dasharray=\"6 4\"" else: ""
+        | let mk    = if (ends_with(arrow, ">>")): " marker-end=\"url(#mm-arrow)\"" elif (ends_with(arrow, "x")): " marker-end=\"url(#mm-cross)\"" else: ""
+        | let st    = " class=\"mm-edge\"" + dash + mk
+        | if (x1 == x2):
+            "<path d=\"M " + _mm_n(x1) + " " + _mm_n(y) + " C " + _mm_n(x1 + 60) + " " + _mm_n(y - 5) + ", " + _mm_n(x1 + 60) + " " + _mm_n(y + 25) + ", " + _mm_n(x1) + " " + _mm_n(y + 20) + "\"" + st + "/>\n" + _mm_text(x1 + 66 + (_mm_text_w(m["text"]) / 2), y + 8, m["text"], "")
+          else:
+            "<line x1=\"" + _mm_n(x1) + "\" y1=\"" + _mm_n(y) + "\" x2=\"" + _mm_n(x2) + "\" y2=\"" + _mm_n(y) + "\"" + st + "/>\n" + _mm_text((x1 + x2) / 2, y - 10, m["text"], "")
+      end
+    ;)
+  | _mm_join(
+      [_mm_svg_open(width, height), _mm_marker_defs()]
+      + lifelines
+      + (if (n == 0): [] else: boxes(pad))
+      + (if (n == 0): [] else: boxes(bottom + 20))
+      + msg_svgs
+      + ["</svg>"]
+    )
+end
+
+# ─── pie renderer ─────────────────────────────────────────────────────────────
+
+def _mm_pie_colors():
+  ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac"]
+end
+
+def _mm_pie_svg(d):
+  let slices = filter(d["slices"], fn(s): s["value"] > 0;)
+  | let ttl    = d["title"]
+  | let total  = fold(slices, 0, fn(a, s): a + s["value"];)
+  | let colors = _mm_pie_colors()
+  | let pi_    = 3.141592653589793
+  | let r      = 120
+  | let pad    = 30
+  | let top    = if (len(ttl) > 0): pad + 30 else: pad
+  | let cx     = pad + r
+  | let cy     = top + r
+  | let lx     = cx + r + 40
+  | let lbl_w  = fold(slices, 0, fn(m, s): max(m, _mm_text_w(s["label"] + " (100%)"));)
+  | let width  = max(lx + 24 + lbl_w + pad, (_mm_text_w(ttl) + (pad * 2)))
+  | let height = max(cy + r + pad, top + (len(slices) * 26) + pad)
+  | let body = if (total == 0):
+      []
+    else:
+      do
+        var angle = 0 - (pi_ / 2)
+        | var out = []
+        | var i   = 0
+        | let _ = while (i < len(slices)):
+            let s    = slices[i]
+            | let fr   = s["value"] / total
+            | let sweep = fr * 2 * pi_
+            | let a0   = angle
+            | let a1   = angle + sweep
+            | let mid  = a0 + (sweep / 2)
+            | let fill = colors[i - (floor(i / len(colors)) * len(colors))]
+            | let shape = if (fr > 0.9999):
+                "<circle cx=\"" + _mm_n(cx) + "\" cy=\"" + _mm_n(cy) + "\" r=\"" + _mm_n(r) + "\" fill=\"" + fill + "\" class=\"mm-sep\" stroke-width=\"2\"/>"
+              else:
+                "<path d=\"M " + _mm_n(cx) + " " + _mm_n(cy) + " L " + _mm_n(cx + (r * cos(a0))) + " " + _mm_n(cy + (r * sin(a0))) + " A " + _mm_n(r) + " " + _mm_n(r) + " 0 " + (if (sweep > pi_): "1" else: "0") + " 1 " + _mm_n(cx + (r * cos(a1))) + " " + _mm_n(cy + (r * sin(a1))) + " Z\" fill=\"" + fill + "\" class=\"mm-sep\" stroke-width=\"2\"/>"
+            | let pct = if (fr >= 0.04):
+                _mm_text_halo(cx + (r * 0.65 * cos(mid)), cy + (r * 0.65 * sin(mid)), to_string(round(fr * 100)) + "%")
+              else:
+                ""
+            | let ly = top + (i * 26)
+            | let legend = "<rect x=\"" + _mm_n(lx) + "\" y=\"" + _mm_n(ly) + "\" width=\"16\" height=\"16\" fill=\"" + fill + "\"/>\n<text x=\"" + _mm_n(lx + 24) + "\" y=\"" + _mm_n(ly + 8) + "\" dy=\"0.35em\" class=\"mm-text\">" + _mm_esc(s["label"]) + " (" + to_string(round(fr * 100)) + "%)</text>"
+            | out += [shape, pct, legend]
+            | angle = a1
+            | i += 1
+            | out
+          end
+        | out
+      end
+  | _mm_join(
+      [_mm_svg_open(width, height)]
+      + (if (len(ttl) > 0): [_mm_text(width / 2, pad + 6, ttl, " font-size=\"18\" font-weight=\"bold\"")] else: [])
+      + body
+      + ["</svg>"]
+    )
+end
+
+# ─── class renderer ───────────────────────────────────────────────────────────
+
+def _mm_class_markers(rel):
+  if (rel == "<|--" || rel == "|>--"):
+    [" marker-start=\"url(#mm-tri)\"", ""]
+  elif (rel == "*--"):
+    [" marker-start=\"url(#mm-dia)\"", ""]
+  elif (rel == "o--"):
+    [" marker-start=\"url(#mm-odia)\"", ""]
+  elif (rel == "--*"):
+    ["", " marker-end=\"url(#mm-dia)\""]
+  elif (rel == "--o"):
+    ["", " marker-end=\"url(#mm-odia)\""]
+  else:
+    ["", ""]
+end
+
+def _mm_class_svg(d):
+  let declared = map(d["classes"], fn(c): c["name"];)
+  | let rels   = d["relations"]
+  | let names  = fold(rels, declared, fn(acc, r):
+      let a = if (any(acc, fn(k): k == r["from"];)): acc else: acc + [r["from"]]
+      | if (any(a, fn(k): k == r["to"];)): a else: a + [r["to"]]
+    ;)
+  | let nds  = map(names, fn(nm): {"id": nm, "label": nm, "shape": "rect"};)
+  | let edges  = map(rels, fn(r): {"from": r["from"], "to": r["to"], "label": r["label"]};)
+  | let lay    = _mm_flow_layout(nds, edges, "TD", 0)
+  | let pos    = lay["pos"]
+  | let drawn  = map(rels, fn(r):
+      do
+        let mk = _mm_class_markers(r["rel"])
+        | _mm_edge_svg({"from": r["from"], "to": r["to"], "label": r["label"]}, edges, pos, mk[0] + mk[1])
+      end
+    ;)
+  | _mm_join(
+      [_mm_svg_open(lay["width"], lay["height"]), _mm_marker_defs()]
+      + map(drawn, fn(r): r[0];)
+      + map(nds, fn(nd): _mm_node_svg(nd, pos[nd["id"]]);)
+      + map(drawn, fn(r): r[1];)
+      + ["</svg>"]
+    )
+end
+
+# ─── state renderer ───────────────────────────────────────────────────────────
+
+def _mm_state_svg(d):
+  let sts = d["states"]
+  | let trs = d["transitions"]
+  | let has_start = any(trs, fn(t): t["from"] == "[*]";)
+  | let has_end   = any(trs, fn(t): t["to"] == "[*]";)
+  | let nds = (if (has_start): [{"id": "__start", "label": "", "shape": "start"}] else: [])
+      + map(sts, fn(s): {"id": s["id"], "label": s["label"], "shape": "round"};)
+      + (if (has_end): [{"id": "__end", "label": "", "shape": "end"}] else: [])
+  | let egs = map(trs, fn(t):
+      {
+        "from": if (t["from"] == "[*]"): "__start" else: t["from"],
+        "to": if (t["to"] == "[*]"): "__end" else: t["to"],
+        "label": t["label"]
+      }
+    ;)
+  | let lay   = _mm_flow_layout(nds, egs, d["direction"], 0)
+  | let pos   = lay["pos"]
+  | let drawn = map(egs, fn(e): _mm_edge_svg(e, egs, pos, " marker-end=\"url(#mm-arrow)\"");)
+  | _mm_join(
+      [_mm_svg_open(lay["width"], lay["height"]), _mm_marker_defs()]
+      + map(drawn, fn(r): r[0];)
+      + map(nds, fn(nd): _mm_node_svg(nd, pos[nd["id"]]);)
+      + map(drawn, fn(r): r[1];)
+      + ["</svg>"]
+    )
+end
+
+# ─── er renderer ──────────────────────────────────────────────────────────────
+
+def _mm_er_cards():
+  {"||": "one", "|o": "zero_one", "o|": "zero_one", "}o": "zero_many", "o{": "zero_many", "}|": "one_many", "|{": "one_many"}
+end
+
+# Point at distance d along u from p, shifted s along the normal of u.
+def _mm_at(px, py, ux, uy, d, s):
+  [px + (ux * d) - (uy * s), py + (uy * d) + (ux * s)]
+end
+
+def _mm_er_bar(px, py, ux, uy, d):
+  let a = _mm_at(px, py, ux, uy, d, 0 - 6)
+  | let b = _mm_at(px, py, ux, uy, d, 6)
+  | "<line x1=\"" + _mm_n(a[0]) + "\" y1=\"" + _mm_n(a[1]) + "\" x2=\"" + _mm_n(b[0]) + "\" y2=\"" + _mm_n(b[1]) + "\" class=\"mm-edge\"/>"
+end
+
+def _mm_er_foot(px, py, ux, uy):
+  let a = _mm_at(px, py, ux, uy, 12, 0 - 6)
+  | let b = _mm_at(px, py, ux, uy, 12, 6)
+  | "<path d=\"M " + _mm_n(a[0]) + " " + _mm_n(a[1]) + " L " + _mm_n(px) + " " + _mm_n(py) + " L " + _mm_n(b[0]) + " " + _mm_n(b[1]) + "\" class=\"mm-edge\"/>"
+end
+
+def _mm_er_circle(px, py, ux, uy, d):
+  let c = _mm_at(px, py, ux, uy, d, 0)
+  | "<circle cx=\"" + _mm_n(c[0]) + "\" cy=\"" + _mm_n(c[1]) + "\" r=\"4.5\" class=\"mm-mhollow\"/>"
+end
+
+# Crow's foot symbol at p; u points away from the entity along the line.
+def _mm_er_symbol(px, py, ux, uy, card):
+  if (card == "one"):
+    _mm_er_bar(px, py, ux, uy, 6) + "\n" + _mm_er_bar(px, py, ux, uy, 11)
+  elif (card == "zero_one"):
+    _mm_er_bar(px, py, ux, uy, 6) + "\n" + _mm_er_circle(px, py, ux, uy, 15)
+  elif (card == "zero_many"):
+    _mm_er_foot(px, py, ux, uy) + "\n" + _mm_er_circle(px, py, ux, uy, 17)
+  else:
+    _mm_er_foot(px, py, ux, uy) + "\n" + _mm_er_bar(px, py, ux, uy, 16)
+end
+
+def _mm_er_row_text(a):
+  [a["type"], a["name"], join(a["keys"], ",")]
+end
+
+# Column widths of an entity's attribute table: [type, name, keys].
+def _mm_er_cols(e):
+  let rows = map(e["attributes"], fn(a): _mm_er_row_text(a);)
+  | [
+      fold(rows, 0, fn(m, r): max(m, _mm_text_w(r[0]));),
+      fold(rows, 0, fn(m, r): max(m, _mm_text_w(r[1]));),
+      fold(rows, 0, fn(m, r): max(m, _mm_text_w(r[2]));)
+    ]
+end
+
+def _mm_er_size(e):
+  let c = _mm_er_cols(e)
+  | let body = c[0] + c[1] + c[2] + (if (c[2] > 0): 48 else: 32)
+  | [max(max(_mm_text_w(e["name"]) + 32, body + 8), 100), 32 + (22 * len(e["attributes"]))]
+end
+
+def _mm_er_entity_svg(e, p):
+  let x = p["x"] - (p["w"] / 2)
+  | let y = p["y"] - (p["h"] / 2)
+  | let c = _mm_er_cols(e)
+  | let box = "<rect x=\"" + _mm_n(x) + "\" y=\"" + _mm_n(y) + "\" width=\"" + _mm_n(p["w"]) + "\" height=\"" + _mm_n(p["h"]) + "\" rx=\"3\" class=\"mm-node\"/>"
+  | let head = _mm_text(p["x"], y + 16, e["name"], " font-weight=\"bold\"")
+  | if (is_empty(e["attributes"])):
+      box + "\n" + head
+    else:
+      do
+        let sep = "<line x1=\"" + _mm_n(x) + "\" y1=\"" + _mm_n(y + 32) + "\" x2=\"" + _mm_n(x + p["w"]) + "\" y2=\"" + _mm_n(y + 32) + "\" class=\"mm-life\"/>"
+        | let rows = map(range(0, len(e["attributes"]) - 1, 1), fn(i):
+            do
+              let r  = _mm_er_row_text(e["attributes"][i])
+              | let ry = y + 32 + (i * 22) + 11
+              | _mm_text_start(x + 12, ry, r[0], "")
+                + "\n" + _mm_text_start(x + 12 + c[0] + 16, ry, r[1], "")
+                + (if (len(r[2]) > 0): "\n" + _mm_text_start(x + 12 + c[0] + 16 + c[1] + 16, ry, r[2], " font-weight=\"bold\" font-size=\"11\"") else: "")
+            end
+          ;)
+        | join([box, head, sep] + rows, "\n")
+      end
+end
+
+def _mm_unit(x, y):
+  let l = max(sqrt((x * x) + (y * y)), 0.0001)
+  | [x / l, y / l]
+end
+
+def _mm_er_relation_svg(r, pos):
+  let a = pos[r["from"]]
+  | let b = pos[r["to"]]
+  | let cards = _mm_er_cards()
+  | let lbl = r["label"]
+  | if (r["from"] == r["to"]):
+      _mm_edge_svg({"from": r["from"], "to": r["to"], "label": lbl}, [], pos, "")
+    else:
+      do
+        let c    = _mm_detour(a, b, r["from"], r["to"], pos)
+        | let q    = if (is_none(c)): _mm_edge_points(a, b) else: [c[0], c[1], c[4], c[5]]
+        | let u1   = if (is_none(c)): _mm_unit(q[2] - q[0], q[3] - q[1]) else: _mm_unit(c[2] - c[0], c[3] - c[1])
+        | let u2   = if (is_none(c)): [0 - u1[0], 0 - u1[1]] else: _mm_unit(c[2] - c[4], c[3] - c[5])
+        | let dash = if (r["line"] == ".."): " stroke-dasharray=\"6 4\"" else: ""
+        | let line = if (is_none(c)):
+            "<line x1=\"" + _mm_n(q[0]) + "\" y1=\"" + _mm_n(q[1]) + "\" x2=\"" + _mm_n(q[2]) + "\" y2=\"" + _mm_n(q[3]) + "\" class=\"mm-edge\"" + dash + "/>"
+          else:
+            "<path d=\"M " + _mm_n(c[0]) + " " + _mm_n(c[1]) + " Q " + _mm_n(c[2]) + " " + _mm_n(c[3]) + " " + _mm_n(c[4]) + " " + _mm_n(c[5]) + "\" class=\"mm-edge\"" + dash + "/>"
+        | let sym  = _mm_er_symbol(q[0], q[1], u1[0], u1[1], cards[r["left"]]) + "\n" + _mm_er_symbol(q[2], q[3], u2[0], u2[1], cards[r["right"]])
+        | let mid  = if (is_none(c)): [(q[0] + q[2]) / 2, (q[1] + q[3]) / 2] else: _mm_quad(c, 0.5)
+        | let lw   = _mm_text_w(lbl) + 10
+        | let label = if (len(lbl) > 0):
+            "<rect x=\"" + _mm_n(mid[0] - (lw / 2)) + "\" y=\"" + _mm_n(mid[1] - 10) + "\" width=\"" + _mm_n(lw) + "\" height=\"20\" class=\"mm-label-bg\"/>\n" + _mm_text(mid[0], mid[1], lbl, "")
+          else:
+            ""
+        | [line + "\n" + sym, label]
+      end
+end
+
+def _mm_er_svg(d):
+  let ents = d["entities"]
+  | let rels = d["relations"]
+  | let nds  = map(ents, fn(e): {"id": e["name"], "label": e["name"], "shape": "entity", "size": _mm_er_size(e)};)
+  | let egs  = map(rels, fn(r): {"from": r["from"], "to": r["to"], "label": r["label"]};)
+  | let lay  = _mm_flow_layout(nds, egs, "TD", 0)
+  | let pos  = lay["pos"]
+  | let drawn = map(rels, fn(r): _mm_er_relation_svg(r, pos);)
+  | _mm_join(
+      [_mm_svg_open(lay["width"], lay["height"])]
+      + map(drawn, fn(r): r[0];)
+      + map(ents, fn(e): _mm_er_entity_svg(e, pos[e["name"]]);)
+      + map(drawn, fn(r): r[1];)
+      + ["</svg>"]
+    )
+end
+
+# ─── gantt renderer ───────────────────────────────────────────────────────────
+
+# Smallest tick step (in days) that gives at most 12 ticks.
+def _mm_gantt_step(span):
+  let steps = [1, 2, 7, 14, 30, 60, 90, 180, 365, 730, 1825]
+  | let ok = filter(steps, fn(k): span / k <= 12;)
+  | if (is_empty(ok)): last(steps) else: first(ok)
+end
+
+def _mm_gantt_tick_label(z, step):
+  let c = _mm_civil(z)
+  | if (step >= 365): to_string(c[0]) elif (step >= 30): to_string(c[0]) + "-" + _mm_pad2(c[1]) else: _mm_pad2(c[1]) + "-" + _mm_pad2(c[2])
+end
+
+def _mm_gantt_bar(t, x, y, w):
+  let tags = t["tags"]
+  | let has = fn(k): any(tags, fn(g): g == k;);
+  | if (has("milestone")):
+      "<polygon points=\"" + _mm_n(x) + "," + _mm_n(y + 1) + " " + _mm_n(x + 9) + "," + _mm_n(y + 10) + " " + _mm_n(x) + "," + _mm_n(y + 19) + " " + _mm_n(x - 9) + "," + _mm_n(y + 10) + "\" class=\"mm-solid\"/>"
+    else:
+      do
+        let bw = max(w, 3)
+        | let box = "<rect x=\"" + _mm_n(x) + "\" y=\"" + _mm_n(y + 2) + "\" width=\"" + _mm_n(bw) + "\" height=\"16\" rx=\"3\""
+        | if (has("crit")):
+            box + " fill=\"#f4b6b8\" stroke=\"#e15759\" stroke-width=\"1.5\"/>"
+          elif (has("done")):
+            box + " fill=\"#cfcfd8\" stroke=\"#9a9aa8\" stroke-width=\"1.5\"/>"
+          elif (has("active")):
+            box + " class=\"mm-node\" stroke-dasharray=\"4 2\"/>"
+          else:
+            box + " class=\"mm-node\"/>"
+      end
+end
+
+def _mm_gantt_svg(d):
+  let ttl   = d["title"]
+  | let all   = fold(d["sections"], [], fn(acc, sec): acc + sec["tasks"];)
+  | let pad   = 30
+  | let rowh  = 28
+  | let top   = if (len(ttl) > 0): pad + 30 else: pad
+  | if (is_empty(all)):
+      _mm_join(
+        [_mm_svg_open(300, top + pad)]
+        + (if (len(ttl) > 0): [_mm_text(150, pad + 6, ttl, " font-size=\"18\" font-weight=\"bold\"")] else: [])
+        + ["</svg>"]
+      )
+    else:
+      do
+        let d0   = fold(all, 1000000, fn(m, t): min(m, _mm_date_days(t["start"]));)
+        | let d1   = fold(all, 0 - 1000000, fn(m, t): max(m, _mm_date_days(t["end"]));)
+        | let span = max(d1 - d0, 1)
+        | let rows = fold(d["sections"], [], fn(acc, sec):
+            acc + (if (sec["name"] == ""): [] else: [{"sec": sec["name"]}]) + map(sec["tasks"], fn(t): {"task": t};)
+          ;)
+        | let name_w = fold(rows, 0, fn(m, r): max(m, _mm_text_w(if (is_none(r["sec"])): r["task"]["name"] else: r["sec"]));)
+        | let left   = pad + name_w + 24
+        | let cw     = 640
+        | let scale  = cw / span
+        | let width  = max(left + cw + pad, _mm_text_w(ttl) + (pad * 2))
+        | let axis_y = top + 8
+        | let rows_y = top + 24
+        | let height = rows_y + (len(rows) * rowh) + pad
+        | let step   = _mm_gantt_step(span)
+        | let ticks  = range(0, floor(span / step), 1)
+        | let grid   = map(ticks, fn(k):
+            do
+              let x = left + (k * step * scale)
+              | "<line x1=\"" + _mm_n(x) + "\" y1=\"" + _mm_n(axis_y + 8) + "\" x2=\"" + _mm_n(x) + "\" y2=\"" + _mm_n(height - pad + 6) + "\" class=\"mm-life\" stroke-opacity=\"0.45\" stroke-dasharray=\"2 3\"/>\n"
+                + _mm_text(x, axis_y, _mm_gantt_tick_label(d0 + (k * step), step), " font-size=\"11\"")
+            end
+          ;)
+        | let row_svgs = map(range(0, len(rows) - 1, 1), fn(i):
+            do
+              let r = rows[i]
+              | let y = rows_y + (i * rowh)
+              | if (is_none(r["sec"])):
+                  do
+                    let t = r["task"]
+                    | let x = left + ((_mm_date_days(t["start"]) - d0) * scale)
+                    | let w = (_mm_date_days(t["end"]) - _mm_date_days(t["start"])) * scale
+                    | _mm_text_start(pad + 12, y + 10, t["name"], "") + "\n" + _mm_gantt_bar(t, x, y, w)
+                  end
+                else:
+                  "<rect x=\"" + _mm_n(pad - 6) + "\" y=\"" + _mm_n(y) + "\" width=\"" + _mm_n(width - (pad * 2) + 12) + "\" height=\"" + _mm_n(rowh - 4) + "\" class=\"mm-band\"/>\n" + _mm_text_start(pad, y + 10, r["sec"], " font-weight=\"bold\"")
+            end
+          ;)
+        | _mm_join(
+            [_mm_svg_open(width, height)]
+            + (if (len(ttl) > 0): [_mm_text(width / 2, pad + 6, ttl, " font-size=\"18\" font-weight=\"bold\"")] else: [])
+            + grid
+            + row_svgs
+            + ["</svg>"]
+          )
+      end
+end
+
+# ─── theming ──────────────────────────────────────────────────────────────────
+# Colors are applied through CSS classes. Every color is also a CSS variable
+# (--mm-bg, --mm-fg, --mm-node, --mm-stroke, --mm-edge, --mm-life) so a host page
+# can restyle a diagram without re-rendering it.
+
+def _mm_themes():
+  {
+    "light": {"bg": "#ffffff", "fg": "#333333", "node": "#ececff", "stroke": "#9370db", "edge": "#333333", "life": "#999999"},
+    "dark":  {"bg": "#1e1e2e", "fg": "#e6e6f0", "node": "#2d2d44", "stroke": "#8b7fd4", "edge": "#cfcfe0", "life": "#777777"}
+  }
+end
+
+# `prop:value;prop:var(--mm-name,value)`. The plain declaration is the fallback
+# for renderers that do not understand var().
+def _mm_decl(prop, name, val):
+  prop + ":" + val + ";" + prop + ":var(--mm-" + name + "," + val + ");"
+end
+
+def _mm_theme_rules(sel, c):
+  join([
+    sel + " .mm-bg{" + _mm_decl("fill", "bg", c["bg"]) + "}",
+    sel + " .mm-text{" + _mm_decl("fill", "fg", c["fg"]) + "}",
+    sel + " .mm-node{" + _mm_decl("fill", "node", c["node"]) + _mm_decl("stroke", "stroke", c["stroke"]) + "stroke-width:1.5}",
+    sel + " .mm-edge{fill:none;" + _mm_decl("stroke", "edge", c["edge"]) + "stroke-width:1.5}",
+    sel + " .mm-label-bg{" + _mm_decl("fill", "bg", c["bg"]) + "fill-opacity:.9}",
+    sel + " .mm-life{" + _mm_decl("stroke", "life", c["life"]) + "stroke-width:1}",
+    sel + " .mm-sep," + sel + " .mm-halo{" + _mm_decl("stroke", "bg", c["bg"]) + "}",
+    sel + " .mm-mfill{" + _mm_decl("fill", "edge", c["edge"]) + _mm_decl("stroke", "edge", c["edge"]) + "}",
+    sel + " .mm-mhollow{" + _mm_decl("fill", "bg", c["bg"]) + _mm_decl("stroke", "edge", c["edge"]) + "}",
+    sel + " .mm-mline{fill:none;" + _mm_decl("stroke", "edge", c["edge"]) + "}",
+    sel + " .mm-solid{" + _mm_decl("fill", "edge", c["edge"]) + _mm_decl("stroke", "edge", c["edge"]) + "}",
+    sel + " .mm-band{" + _mm_decl("fill", "node", c["node"]) + "fill-opacity:.45}",
+    sel + " .mm-group{" + _mm_decl("fill", "node", c["node"]) + _mm_decl("stroke", "life", c["life"]) + "fill-opacity:.3;stroke-width:1}"
+  ], "")
+end
+
+def _mm_theme_style(theme):
+  let t = _mm_themes()
+  | let css = if (theme == "auto"):
+      _mm_theme_rules(".mm-auto", t["light"]) + "@media (prefers-color-scheme: dark){" + _mm_theme_rules(".mm-auto", t["dark"]) + "}"
+    else:
+      _mm_theme_rules("." + "mm-" + theme, t[theme])
+  | "<style>" + css + "</style>"
+end
+
+def _mm_apply_theme(svg, theme):
+  if (!any(["light", "dark", "auto"], fn(k): k == theme;)):
+    error("mermaid: unknown theme: " + to_string(theme) + " (use light, dark or auto)")
+  else:
+    replace(replace(svg, "mm-theme-slot", "mm mm-" + theme), "<!--mm-style-->", _mm_theme_style(theme))
+end
+
+def _mm_opt(opts, key, default):
+  if (is_dict(opts) && !is_none(opts[key])): opts[key] else: default
+end
+
+def _mm_render(diagram):
+  let d = if (is_string(diagram)): mermaid_parse(diagram) else: diagram
+  | let t = d["type"]
+  | if (t == "flowchart"):
+      _mm_flow_svg(d)
+    elif (t == "sequenceDiagram"):
+      _mm_seq_svg(d)
+    elif (t == "pie"):
+      _mm_pie_svg(d)
+    elif (t == "classDiagram"):
+      _mm_class_svg(d)
+    elif (t == "stateDiagram"):
+      _mm_state_svg(d)
+    elif (t == "erDiagram"):
+      _mm_er_svg(d)
+    elif (t == "gantt"):
+      _mm_gantt_svg(d)
+    else:
+      error("mermaid: cannot render diagram type: " + to_string(t))
+end
+
+def _mm_blocks(markdown):
+  filter(to_markdown(to_string(markdown)), fn(n): n.lang == "mermaid";)
+end
+
 # ─── public API ───────────────────────────────────────────────────────────────
 
-# Parses a Mermaid diagram string and returns structured data.
-#
-# Supported diagram types:
-#   flowchart / graph  → { type, direction, nodes, edges }
-#   sequenceDiagram    → { type, participants, messages }
-#   pie                → { type, title, slices }
-#   classDiagram       → { type, classes, relations }
-#
-# Unknown diagram types return { type, raw_lines }.
 # Converts a parsed Mermaid diagram back to Mermaid diagram text.
 #
 # Supported diagram types:
-#   flowchart / graph  →  graph {dir}\n  …edges…\n  …standalone nodes…
+#   flowchart / graph  →  graph {dir}\n  subgraphs, edges, standalone nodes
 #   sequenceDiagram    →  sequenceDiagram\n  participant …\n  …messages…
 #   pie                →  pie title {title}\n  "{label}" : {value}
 #   classDiagram       →  classDiagram\n  class …\n  …relations…
+#   stateDiagram       →  stateDiagram-v2\n  …transitions…
+#   erDiagram          →  erDiagram\n  …relations…\n  entity blocks
+#   gantt              →  gantt\n  section …\n  task : tags, id, start, end
 #   unknown            →  {type}\n  …raw_lines…
 def mermaid_stringify(diagram):
   let t = diagram["type"]
@@ -350,6 +1691,12 @@ def mermaid_stringify(diagram):
       _mm_pie_stringify(diagram)
     elif (t == "classDiagram"):
       _mm_class_stringify(diagram)
+    elif (t == "stateDiagram"):
+      _mm_state_stringify(diagram)
+    elif (t == "erDiagram"):
+      _mm_er_stringify(diagram)
+    elif (t == "gantt"):
+      _mm_gantt_stringify(diagram)
     else:
       do
         let raw_lines = diagram["raw_lines"]
@@ -357,6 +1704,18 @@ def mermaid_stringify(diagram):
       end
 end
 
+# Parses a Mermaid diagram string and returns structured data.
+#
+# Supported diagram types:
+#   flowchart / graph  → { type, direction, nodes, edges, subgraphs }
+#   sequenceDiagram    → { type, participants, messages }
+#   pie                → { type, title, slices }
+#   classDiagram       → { type, classes, relations }
+#   stateDiagram       → { type, direction, states, transitions }
+#   erDiagram          → { type, entities, relations }
+#   gantt              → { type, title, sections }
+#
+# Unknown diagram types return { type, raw_lines }.
 def mermaid_parse(input):
   let all_lines = _mm_lines(input)
   | if (is_empty(all_lines)):
@@ -373,7 +1732,144 @@ def mermaid_parse(input):
             _mm_parse_pie(all_lines)
           elif (is_regex_match(header, "^classdiagram")):
             _mm_parse_class(body)
+          elif (is_regex_match(header, "^statediagram")):
+            _mm_parse_state(body)
+          elif (is_regex_match(header, "^erdiagram")):
+            _mm_parse_er(body)
+          elif (is_regex_match(header, "^gantt")):
+            _mm_parse_gantt(body)
           else:
             {"type": header, "raw_lines": body}
       end
+end
+
+# Extracts the source of every ```mermaid code block in a Markdown string.
+# Returns an array of strings (one per block, in document order).
+def mermaid_extract(markdown):
+  map(_mm_blocks(markdown), fn(n): to_text(n);)
+end
+
+# Renders a diagram as an SVG string.
+# Accepts either Mermaid text or a parsed diagram (as returned by mermaid_parse).
+#
+# Supported diagram types: flowchart / graph, sequenceDiagram, pie, classDiagram,
+# stateDiagram, erDiagram and gantt.
+# Any other type raises an error.
+def mermaid_to_svg(diagram):
+  mermaid_to_svg_with(diagram, {})
+end
+
+# Like mermaid_to_svg with options:
+#   theme  "light" (default) | "dark" | "auto" (follows prefers-color-scheme)
+def mermaid_to_svg_with(diagram, opts):
+  _mm_apply_theme(_mm_render(diagram), _mm_opt(opts, "theme", "light"))
+end
+
+# Replaces every ```mermaid code block in a Markdown string with an inline SVG.
+# Blocks that fail to parse or use an unsupported diagram type are left untouched.
+def mermaid_render_markdown(markdown):
+  mermaid_render_markdown_with(markdown, {})
+end
+
+def mermaid_render_markdown_with(markdown, opts):
+  let md = to_string(markdown)
+  | fold(_mm_blocks(md), md, fn(acc, blk):
+      let svg = try: mermaid_to_svg_with(to_text(blk), opts) catch: None
+      | if (is_none(svg)): acc else: replace(acc, to_string(blk), svg)
+    ;)
+end
+
+# Renders every ```mermaid block of a Markdown string.
+# Returns one SVG string per block, or None for a block that cannot be rendered.
+def mermaid_svgs(markdown, opts):
+  map(mermaid_extract(markdown), fn(src): try: mermaid_to_svg_with(src, opts) catch: None;)
+end
+
+# Replaces every renderable ```mermaid block with an image link
+# `![Mermaid diagram N](path_fn(N))`, where N counts all mermaid blocks from 1.
+# Pair it with mermaid_svgs to write the files the links point to.
+def mermaid_link_markdown(markdown, path_fn, opts):
+  let md   = to_string(markdown)
+  | let blks = _mm_blocks(md)
+  | let svgs = mermaid_svgs(md, opts)
+  | if (is_empty(blks)):
+      md
+    else:
+      fold(range(0, len(blks) - 1, 1), md, fn(acc, i):
+        if (is_none(svgs[i])):
+          acc
+        else:
+          replace(acc, to_string(blks[i]), "![Mermaid diagram " + to_string(i + 1) + "](" + path_fn(i + 1) + ")")
+      ;)
+end
+
+# ─── command line ─────────────────────────────────────────────────────────────
+
+def _mm_sources(input):
+  let blks = mermaid_extract(input)
+  | if (is_empty(blks)): [to_string(input)] else: blks
+end
+
+def _mm_pick(input, a):
+  let srcs = _mm_sources(input)
+  | let n   = to_number(_mm_opt(a, "nth", "1"))
+  | if (n < 1 || n > len(srcs)):
+      error("mermaid: nth " + to_string(n) + " is out of range (" + to_string(len(srcs)) + " diagram(s) found)")
+    else:
+      srcs[n - 1]
+end
+
+def _mm_base(file): gsub(file, "^.*/", "");
+def _mm_dir(file): if (is_regex_match(file, "/")): gsub(file, "/[^/]*$", "") else: ".";
+def _mm_stem(file): gsub(_mm_base(file), "\\.[^.]*$", "");
+
+# Writes each renderable block to `<out_dir>/<name>-N.svg` and returns the Markdown with
+# image links to them.
+def _mm_files(input, a, file):
+  if (is_none(file) || file == ""):
+    error("mermaid: `files` needs a file argument")
+  else:
+    do
+      let opts = {"theme": _mm_opt(a, "theme", "light")}
+      | let name = _mm_opt(a, "name", _mm_stem(file))
+      | let out_dir = _mm_opt(a, "out_dir", _mm_dir(file))
+      | let link_dir = _mm_opt(a, "link_dir", if (is_none(a["out_dir"])): "" else: out_dir)
+      | let svgs = mermaid_svgs(input, opts)
+      | let fname = fn(n): name + "-" + to_string(n) + ".svg";
+      | let _ = map(range(0, len(svgs) - 1, 1), fn(i):
+          if (is_none(svgs[i])): None else: write_file(out_dir + "/" + fname(i + 1), svgs[i])
+        ;)
+      | let link = fn(n): if (link_dir == ""): fname(n) else: link_dir + "/" + fname(n);
+      | let md = mermaid_link_markdown(input, link, opts)
+      | if (_mm_opt(a, "write", "false") == "true"):
+          do
+            write_file(file, md)
+            | md
+          end
+        else:
+          md
+    end
+end
+
+# Entry point of the compiled command (see cli.mq). `a` holds the named arguments:
+#   mode      svg (default) | extract | parse | render | files
+#   nth       which diagram to use for svg / extract / parse (default 1)
+#   theme     light (default) | dark | auto
+#   out_dir, link_dir, name, write   options of `files`
+# `input` is a Markdown document or a single diagram.
+def mermaid_run(input, a, file):
+  let mode = _mm_opt(a, "mode", "svg")
+  | let opts = {"theme": _mm_opt(a, "theme", "light")}
+  | if (mode == "svg"):
+      mermaid_to_svg_with(_mm_pick(input, a), opts)
+    elif (mode == "extract"):
+      if (is_none(a["nth"])): join(_mm_sources(input), "\n\n") else: _mm_pick(input, a)
+    elif (mode == "parse"):
+      mermaid_parse(_mm_pick(input, a))
+    elif (mode == "render"):
+      mermaid_render_markdown_with(input, opts)
+    elif (mode == "files"):
+      _mm_files(input, a, file)
+    else:
+      error("mermaid: unknown mode: " + to_string(mode) + " (use svg, extract, parse, render or files)")
 end

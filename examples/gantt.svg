@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="mm mm-auto" viewBox="0 0 791.5 310" width="791.5" height="310" font-family="trebuchet ms, verdana, arial, sans-serif" font-size="14">
+<style>.mm-auto .mm-bg{fill:#ffffff;fill:var(--mm-bg,#ffffff);}.mm-auto .mm-text{fill:#333333;fill:var(--mm-fg,#333333);}.mm-auto .mm-node{fill:#ececff;fill:var(--mm-node,#ececff);stroke:#9370db;stroke:var(--mm-stroke,#9370db);stroke-width:1.5}.mm-auto .mm-edge{fill:none;stroke:#333333;stroke:var(--mm-edge,#333333);stroke-width:1.5}.mm-auto .mm-label-bg{fill:#ffffff;fill:var(--mm-bg,#ffffff);fill-opacity:.9}.mm-auto .mm-life{stroke:#999999;stroke:var(--mm-life,#999999);stroke-width:1}.mm-auto .mm-sep,.mm-auto .mm-halo{stroke:#ffffff;stroke:var(--mm-bg,#ffffff);}.mm-auto .mm-mfill{fill:#333333;fill:var(--mm-edge,#333333);stroke:#333333;stroke:var(--mm-edge,#333333);}.mm-auto .mm-mhollow{fill:#ffffff;fill:var(--mm-bg,#ffffff);stroke:#333333;stroke:var(--mm-edge,#333333);}.mm-auto .mm-mline{fill:none;stroke:#333333;stroke:var(--mm-edge,#333333);}.mm-auto .mm-solid{fill:#333333;fill:var(--mm-edge,#333333);stroke:#333333;stroke:var(--mm-edge,#333333);}.mm-auto .mm-band{fill:#ececff;fill:var(--mm-node,#ececff);fill-opacity:.45}.mm-auto .mm-group{fill:#ececff;fill:var(--mm-node,#ececff);stroke:#999999;stroke:var(--mm-life,#999999);fill-opacity:.3;stroke-width:1}@media (prefers-color-scheme: dark){.mm-auto .mm-bg{fill:#1e1e2e;fill:var(--mm-bg,#1e1e2e);}.mm-auto .mm-text{fill:#e6e6f0;fill:var(--mm-fg,#e6e6f0);}.mm-auto .mm-node{fill:#2d2d44;fill:var(--mm-node,#2d2d44);stroke:#8b7fd4;stroke:var(--mm-stroke,#8b7fd4);stroke-width:1.5}.mm-auto .mm-edge{fill:none;stroke:#cfcfe0;stroke:var(--mm-edge,#cfcfe0);stroke-width:1.5}.mm-auto .mm-label-bg{fill:#1e1e2e;fill:var(--mm-bg,#1e1e2e);fill-opacity:.9}.mm-auto .mm-life{stroke:#777777;stroke:var(--mm-life,#777777);stroke-width:1}.mm-auto .mm-sep,.mm-auto .mm-halo{stroke:#1e1e2e;stroke:var(--mm-bg,#1e1e2e);}.mm-auto .mm-mfill{fill:#cfcfe0;fill:var(--mm-edge,#cfcfe0);stroke:#cfcfe0;stroke:var(--mm-edge,#cfcfe0);}.mm-auto .mm-mhollow{fill:#1e1e2e;fill:var(--mm-bg,#1e1e2e);stroke:#cfcfe0;stroke:var(--mm-edge,#cfcfe0);}.mm-auto .mm-mline{fill:none;stroke:#cfcfe0;stroke:var(--mm-edge,#cfcfe0);}.mm-auto .mm-solid{fill:#cfcfe0;fill:var(--mm-edge,#cfcfe0);stroke:#cfcfe0;stroke:var(--mm-edge,#cfcfe0);}.mm-auto .mm-band{fill:#2d2d44;fill:var(--mm-node,#2d2d44);fill-opacity:.45}.mm-auto .mm-group{fill:#2d2d44;fill:var(--mm-node,#2d2d44);stroke:#777777;stroke:var(--mm-life,#777777);fill-opacity:.3;stroke-width:1}}</style>
+<rect width="100%" height="100%" class="mm-bg"/>
+<text x="395.8" y="36" dy="0.35em" text-anchor="middle" class="mm-text" font-size="18" font-weight="bold">Release plan</text>
+<line x1="121.5" y1="76" x2="121.5" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="121.5" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">01-05</text>
+<line x1="186.4" y1="76" x2="186.4" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="186.4" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">01-12</text>
+<line x1="251.4" y1="76" x2="251.4" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="251.4" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">01-19</text>
+<line x1="316.3" y1="76" x2="316.3" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="316.3" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">01-26</text>
+<line x1="381.2" y1="76" x2="381.2" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="381.2" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">02-02</text>
+<line x1="446.1" y1="76" x2="446.1" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="446.1" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">02-09</text>
+<line x1="511.1" y1="76" x2="511.1" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="511.1" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">02-16</text>
+<line x1="576" y1="76" x2="576" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="576" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">02-23</text>
+<line x1="640.9" y1="76" x2="640.9" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="640.9" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">03-02</text>
+<line x1="705.8" y1="76" x2="705.8" y2="286" class="mm-life" stroke-opacity="0.45" stroke-dasharray="2 3"/>
+<text x="705.8" y="68" dy="0.35em" text-anchor="middle" class="mm-text" font-size="11">03-09</text>
+<rect x="24" y="84" width="743.5" height="24" class="mm-band"/>
+<text x="30" y="94" dy="0.35em" class="mm-text" font-weight="bold">Design</text>
+<text x="42" y="122" dy="0.35em" class="mm-text">Research</text>
+<rect x="121.5" y="114" width="139.1" height="16" rx="3" fill="#cfcfd8" stroke="#9a9aa8" stroke-width="1.5"/>
+<text x="42" y="150" dy="0.35em" class="mm-text">Prototype</text>
+<rect x="260.6" y="142" width="139.1" height="16" rx="3" class="mm-node" stroke-dasharray="4 2"/>
+<rect x="24" y="168" width="743.5" height="24" class="mm-band"/>
+<text x="30" y="178" dy="0.35em" class="mm-text" font-weight="bold">Build</text>
+<text x="42" y="206" dy="0.35em" class="mm-text">Backend</text>
+<rect x="371.9" y="198" width="278.3" height="16" rx="3" fill="#f4b6b8" stroke="#e15759" stroke-width="1.5"/>
+<text x="42" y="234" dy="0.35em" class="mm-text">Frontend</text>
+<rect x="399.8" y="226" width="194.8" height="16" rx="3" class="mm-node"/>
+<text x="42" y="262" dy="0.35em" class="mm-text">Launch</text>
+<polygon points="761.5,253 770.5,262 761.5,271 752.5,262" class="mm-solid"/>
+</svg>

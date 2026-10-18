@@ -1,0 +1,10 @@
+flowchart LR
+  Client & Mobile --> UI
+  subgraph Frontend
+    UI[Web UI]
+  end
+  subgraph Backend
+    API[API server] ==> DB[(Database)]
+    API -.-> Cache[[Cache]]
+  end
+  UI --> API

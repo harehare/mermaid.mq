@@ -199,8 +199,8 @@ end
 # -- unknown type --
 
 def test_unknown_type():
-  let result = mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d")
-  | assert_eq(result["type"], "gantt")
+  let result = mermaid_parse("journey\n  title Plan\n  task1 : 2024-01-01, 7d")
+  | assert_eq(result["type"], "journey")
 end
 
 # ─── additional fixtures ───────────────────────────────────────────────────────
@@ -403,12 +403,12 @@ end
 # ─── mermaid_stringify: unknown type ─────────────────────────────────────────
 
 def test_to_string_unknown_header():
-  let result = mermaid_stringify(mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d"))
-  | assert_eq(first(split(result, "\n")), "gantt")
+  let result = mermaid_stringify(mermaid_parse("journey\n  title Plan\n  task1 : 2024-01-01, 7d"))
+  | assert_eq(first(split(result, "\n")), "journey")
 end
 
 def test_to_string_unknown_raw_lines():
-  let result = mermaid_stringify(mermaid_parse("gantt\n  title Plan\n  task1 : 2024-01-01, 7d"))
+  let result = mermaid_stringify(mermaid_parse("journey\n  title Plan\n  task1 : 2024-01-01, 7d"))
   | assert_contains(split(result, "\n"), "  title Plan")
 end
 
@@ -572,4 +572,725 @@ def test_roundtrip_class_no_label():
   | let rt    = mermaid_parse(mermaid_stringify(parsed))
   | let rel   = first(rt["relations"])
   | assert_eq(rel["label"], "")
+end
+
+# -- flowchart labels with spaces --
+
+def test_flowchart_label_with_spaces():
+  let result = mermaid_parse("graph TD\n  A[Start here] --> B{Is it ok?}\n  B -->|Not OK| C(Try again)")
+  | let ids = map(result["nodes"], fn(n): n["id"];)
+  | let b   = first(filter(result["nodes"], fn(n): n["id"] == "B";))
+  | assert_eq(ids, ["A", "B", "C"])
+  | assert_eq(b["label"], "Is it ok?")
+end
+
+# -- extract --
+
+def _doc():
+  "# Doc\n\n```mermaid\ngraph LR\n  A --> B\n```\n\ntext\n\n```js\nlet x = 1\n```\n\n```mermaid\npie\n  \"a\" : 1\n```\n"
+end
+
+def test_extract_only_mermaid_blocks():
+  assert_len(mermaid_extract(_doc()), 2)
+end
+
+def test_extract_block_source():
+  assert_eq(first(mermaid_extract(_doc())), "graph LR\n  A --> B")
+end
+
+def test_extract_none():
+  assert_eq(mermaid_extract("# just text\n"), [])
+end
+
+def test_extract_then_parse():
+  let types = map(mermaid_extract(_doc()), fn(s): mermaid_parse(s)["type"];)
+  | assert_eq(types, ["flowchart", "pie"])
+end
+
+# -- svg --
+
+def test_svg_flowchart_is_svg():
+  let svg = mermaid_to_svg(_flowchart_lr())
+  | assert_contains(svg, "<svg ")
+  | assert_contains(svg, "</svg>")
+end
+
+def test_svg_flowchart_node_labels():
+  let svg = mermaid_to_svg(_flowchart_lr())
+  | assert_contains(svg, ">Start</text>")
+  | assert_contains(svg, ">Decision</text>")
+  | assert_contains(svg, "<polygon")
+end
+
+def test_svg_flowchart_edge_labels():
+  let svg = mermaid_to_svg(_flowchart_lr())
+  | assert_contains(svg, ">yes</text>")
+  | assert_contains(svg, ">no</text>")
+end
+
+def test_svg_accepts_parsed_diagram():
+  assert_eq(mermaid_to_svg(mermaid_parse(_flowchart_td())), mermaid_to_svg(_flowchart_td()))
+end
+
+def test_svg_flowchart_cycle_terminates():
+  let svg = mermaid_to_svg("graph TD\n  A --> B\n  B --> C\n  C --> A")
+  | assert_contains(svg, "</svg>")
+end
+
+def test_svg_flowchart_direction_changes_layout():
+  assert_eq(mermaid_to_svg("graph LR\n  A --> B") == mermaid_to_svg("graph TD\n  A --> B"), false)
+end
+
+def test_svg_escapes_text():
+  let svg = mermaid_to_svg("graph TD\n  A[a < b & c] --> B")
+  | assert_contains(svg, "a &lt; b &amp; c")
+end
+
+def test_svg_sequence():
+  let svg = mermaid_to_svg(_seq())
+  | assert_contains(svg, ">Alice</text>")
+  | assert_contains(svg, ">Hello</text>")
+  | assert_contains(svg, "stroke-dasharray")
+end
+
+def test_svg_pie():
+  let svg = mermaid_to_svg(_pie())
+  | assert_contains(svg, ">Languages</text>")
+  | assert_contains(svg, "Rust (45%)")
+  | assert_contains(svg, "<path")
+end
+
+def test_svg_pie_single_slice_is_circle():
+  assert_contains(mermaid_to_svg("pie\n  \"a\" : 3"), "<circle")
+end
+
+def test_svg_class():
+  let svg = mermaid_to_svg(_class())
+  | assert_contains(svg, ">Animal</text>")
+  | assert_contains(svg, ">inherits</text>")
+  | assert_contains(svg, "marker-start=\"url(#mm-tri)\"")
+end
+
+def test_svg_class_undeclared_endpoints():
+  let svg = mermaid_to_svg("classDiagram\n  Animal <|-- Dog")
+  | assert_contains(svg, ">Animal</text>")
+  | assert_contains(svg, ">Dog</text>")
+end
+
+def test_svg_has_no_blank_lines():
+  assert_eq(contains(mermaid_to_svg(_flowchart_lr()), "\n\n"), false)
+end
+
+def test_svg_unsupported_type_errors():
+  let r = try: mermaid_to_svg("journey\n  title x") catch: "error"
+  | assert_eq(r, "error")
+end
+
+# -- render markdown --
+
+def test_render_markdown_replaces_blocks():
+  let out = mermaid_render_markdown(_doc())
+  | assert_contains(out, "<svg ")
+  | assert_eq(contains(out, "```mermaid"), false)
+end
+
+def test_render_markdown_keeps_other_content():
+  let out = mermaid_render_markdown(_doc())
+  | assert_contains(out, "# Doc")
+  | assert_contains(out, "```js\nlet x = 1\n```")
+end
+
+def test_render_markdown_leaves_unsupported_block():
+  let md = "```mermaid\njourney\n  title x\n```\n"
+  | assert_eq(mermaid_render_markdown(md), md)
+end
+
+# -- themes --
+
+def test_svg_default_theme_is_light():
+  let svg = mermaid_to_svg(_flowchart_lr())
+  | assert_contains(svg, "class=\"mm mm-light\"")
+  | assert_contains(svg, ".mm-light .mm-bg{fill:#ffffff")
+end
+
+def test_svg_dark_theme():
+  let svg = mermaid_to_svg_with(_flowchart_lr(), {"theme": "dark"})
+  | assert_contains(svg, "class=\"mm mm-dark\"")
+  | assert_contains(svg, "#1e1e2e")
+end
+
+def test_svg_auto_theme_follows_color_scheme():
+  let svg = mermaid_to_svg_with(_flowchart_lr(), {"theme": "auto"})
+  | assert_contains(svg, "prefers-color-scheme: dark")
+end
+
+def test_svg_colors_are_css_variables():
+  let svg = mermaid_to_svg(_flowchart_lr())
+  | assert_contains(svg, "var(--mm-bg,#ffffff)")
+  | assert_contains(svg, "var(--mm-stroke,#9370db)")
+end
+
+def test_svg_unknown_theme_errors():
+  let r = try: mermaid_to_svg_with(_flowchart_lr(), {"theme": "neon"}) catch: "error"
+  | assert_eq(r, "error")
+end
+
+def test_svg_themes_apply_to_every_diagram_type():
+  let all = [_flowchart_lr(), _seq(), _pie(), _class()]
+  | let ok  = map(all, fn(src): contains(mermaid_to_svg_with(src, {"theme": "dark"}), "class=\"mm mm-dark\"");)
+  | assert_eq(ok, [true, true, true, true])
+end
+
+# -- svgs and image links --
+
+def _doc_with_unsupported():
+  "```mermaid\ngraph LR\n  A --> B\n```\n\n```mermaid\njourney\n  title x\n```\n\n```mermaid\npie\n  \"a\" : 1\n```\n"
+end
+
+def test_svgs_one_per_block():
+  assert_len(mermaid_svgs(_doc_with_unsupported(), {}), 3)
+end
+
+def test_svgs_none_for_unsupported_block():
+  let svgs = mermaid_svgs(_doc_with_unsupported(), {})
+  | assert_eq(is_none(svgs[1]), true)
+  | assert_eq(is_none(svgs[0]), false)
+end
+
+def test_link_markdown_replaces_blocks_with_images():
+  let out = mermaid_link_markdown(_doc(), fn(n): "d-" + to_string(n) + ".svg";, {})
+  | assert_contains(out, "![Mermaid diagram 1](d-1.svg)")
+  | assert_contains(out, "![Mermaid diagram 2](d-2.svg)")
+  | assert_eq(contains(out, "```mermaid"), false)
+end
+
+def test_link_markdown_numbers_count_unsupported_blocks():
+  let out = mermaid_link_markdown(_doc_with_unsupported(), fn(n): "d-" + to_string(n) + ".svg";, {})
+  | assert_contains(out, "(d-1.svg)")
+  | assert_contains(out, "```mermaid\njourney")
+  | assert_contains(out, "(d-3.svg)")
+end
+
+def test_link_markdown_keeps_other_content():
+  let out = mermaid_link_markdown(_doc(), fn(n): "d-" + to_string(n) + ".svg";, {})
+  | assert_contains(out, "# Doc")
+  | assert_contains(out, "```js\nlet x = 1\n```")
+end
+
+# -- command (mermaid_run) --
+
+def test_run_svg_default_mode():
+  assert_contains(mermaid_run(_doc(), {}, None), "<svg ")
+end
+
+def test_run_svg_of_plain_diagram():
+  assert_contains(mermaid_run(_flowchart_lr(), {}, None), ">Start</text>")
+end
+
+def test_run_svg_nth():
+  let svg = mermaid_run(_doc(), {"nth": "2"}, None)
+  | assert_contains(svg, "(100%)")
+end
+
+def test_run_theme_argument():
+  assert_contains(mermaid_run(_doc(), {"theme": "dark"}, None), "mm-dark")
+end
+
+def test_run_extract_all():
+  assert_eq(mermaid_run(_doc(), {"mode": "extract"}, None), "graph LR\n  A --> B\n\npie\n  \"a\" : 1")
+end
+
+def test_run_extract_nth():
+  assert_eq(mermaid_run(_doc(), {"mode": "extract", "nth": "1"}, None), "graph LR\n  A --> B")
+end
+
+def test_run_parse_mode():
+  assert_eq(mermaid_run(_doc(), {"mode": "parse", "nth": "2"}, None)["type"], "pie")
+end
+
+def test_run_render_mode():
+  let out = mermaid_run(_doc(), {"mode": "render"}, None)
+  | assert_contains(out, "<svg ")
+  | assert_eq(contains(out, "```mermaid"), false)
+end
+
+def test_run_nth_out_of_range_errors():
+  let r = try: mermaid_run(_doc(), {"nth": "9"}, None) catch: "error"
+  | assert_eq(r, "error")
+end
+
+def test_run_unknown_mode_errors():
+  let r = try: mermaid_run(_doc(), {"mode": "nope"}, None) catch: "error"
+  | assert_eq(r, "error")
+end
+
+def test_run_files_needs_a_file():
+  let r = try: mermaid_run(_doc(), {"mode": "files"}, None) catch: "error"
+  | assert_eq(r, "error")
+end
+
+# -- sequence arrows without spaces --
+
+def _arrows_of(src):
+  map(mermaid_parse(src)["messages"], fn(m): m["arrow"];)
+end
+
+def test_seq_no_spaces_around_arrows():
+  let result = mermaid_parse("sequenceDiagram\n  Alice->>Bob: Hi\n  Bob-->>Alice: Yo")
+  | let m = first(result["messages"])
+  | assert_eq(map(result["participants"], fn(p): p["name"];), ["Alice", "Bob"])
+  | assert_eq(m["from"], "Alice")
+  | assert_eq(m["to"], "Bob")
+  | assert_eq(m["text"], "Hi")
+end
+
+def test_seq_no_spaces_cross_arrows():
+  let result = mermaid_parse("sequenceDiagram\n  Alice-xBob: Oops\n  Bob--xAlice: Again")
+  | assert_eq(map(result["participants"], fn(p): p["name"];), ["Alice", "Bob"])
+  | assert_eq(map(result["messages"], fn(m): m["arrow"];), ["-x", "--x"])
+end
+
+def test_seq_every_arrow_without_spaces():
+  assert_eq(
+    _arrows_of("sequenceDiagram\n  A->>B: 1\n  A-->>B: 2\n  A->B: 3\n  A-->B: 4\n  A-xB: 5\n  A--xB: 6"),
+    ["->>", "-->>", "->", "-->", "-x", "--x"]
+  )
+end
+
+def test_seq_participant_names_with_spaces():
+  let m = first(mermaid_parse("sequenceDiagram\n  Alice Smith ->> Bob Jones: Hi")["messages"])
+  | assert_eq(m["from"], "Alice Smith")
+  | assert_eq(m["to"], "Bob Jones")
+end
+
+def test_seq_ignores_notes_and_blocks():
+  let result = mermaid_parse("sequenceDiagram\n  Alice->>Bob: a->>b\n  Note over Alice,Bob: see->>this\n  loop Every minute\n  end")
+  | assert_len(result["messages"], 1)
+  | assert_eq(first(result["messages"])["text"], "a->>b")
+end
+
+def test_seq_unspaced_roundtrip():
+  let rt = mermaid_parse(mermaid_stringify(mermaid_parse("sequenceDiagram\n  Alice-xBob: Oops")))
+  | assert_eq(first(rt["messages"])["to"], "Bob")
+end
+
+def test_svg_sequence_unspaced_has_no_ghost_participant():
+  let svg = mermaid_to_svg("sequenceDiagram\n  Alice-xBob: Oops")
+  | assert_eq(contains(svg, "Bob-"), false)
+  | assert_contains(svg, ">Bob</text>")
+end
+
+# -- state diagram --
+
+def _state():
+  "stateDiagram-v2\n  [*] --> Still\n  Still --> Moving : push\n  Moving --> [*]\n  state \"Out of order\" as Crash\n  Moving --> Crash"
+end
+
+def test_state_type():
+  assert_eq(mermaid_parse(_state())["type"], "stateDiagram")
+end
+
+def test_state_v1_header():
+  assert_eq(mermaid_parse("stateDiagram\n  A --> B")["type"], "stateDiagram")
+end
+
+def test_state_states_exclude_marker():
+  let ids = map(mermaid_parse(_state())["states"], fn(s): s["id"];)
+  | assert_eq(ids, ["Still", "Moving", "Crash"])
+end
+
+def test_state_transitions():
+  let trs = mermaid_parse(_state())["transitions"]
+  | assert_len(trs, 4)
+  | assert_eq(trs[0]["from"], "[*]")
+  | assert_eq(trs[1]["label"], "push")
+end
+
+def test_state_label_alias():
+  let crash = last(mermaid_parse(_state())["states"])
+  | assert_eq(crash["label"], "Out of order")
+end
+
+def test_state_description_sets_label():
+  let s = first(mermaid_parse("stateDiagram-v2\n  s1 : A long description\n  s1 --> s2")["states"])
+  | assert_eq(s["label"], "A long description")
+end
+
+def test_state_direction():
+  assert_eq(mermaid_parse("stateDiagram-v2\n  direction LR\n  A --> B")["direction"], "LR")
+  | assert_eq(mermaid_parse("stateDiagram-v2\n  A --> B")["direction"], "TD")
+end
+
+def test_state_composite_is_flattened():
+  let ids = map(mermaid_parse("stateDiagram-v2\n  state Outer {\n    [*] --> Inner\n  }\n  Outer --> Done")["states"], fn(s): s["id"];)
+  | assert_eq(ids, ["Outer", "Inner", "Done"])
+end
+
+def test_state_roundtrip():
+  let parsed = mermaid_parse(_state())
+  | let rt     = mermaid_parse(mermaid_stringify(parsed))
+  | let by_id  = fn(sts): sort_by(sts, fn(x): x["id"];);
+  | assert_eq(rt["transitions"], parsed["transitions"])
+  | assert_eq(by_id(rt["states"]), by_id(parsed["states"]))
+end
+
+def test_state_stringify_header():
+  assert_contains(mermaid_stringify(mermaid_parse(_state())), "stateDiagram-v2")
+end
+
+def test_svg_state():
+  let svg = mermaid_to_svg(_state())
+  | assert_contains(svg, ">Still</text>")
+  | assert_contains(svg, ">push</text>")
+  | assert_contains(svg, ">Out of order</text>")
+  | assert_contains(svg, "mm-solid")
+end
+
+def test_svg_state_without_markers_has_none():
+  assert_eq(contains(mermaid_to_svg("stateDiagram-v2\n  A --> B"), "class=\"mm-solid\""), false)
+end
+
+# -- er diagram --
+
+def _er():
+  "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  ORDER }|..|{ ITEM : \"is in\"\n  CUSTOMER {\n    string name\n    string id PK, FK \"the key\"\n  }\n  LONELY"
+end
+
+def test_er_type():
+  assert_eq(mermaid_parse(_er())["type"], "erDiagram")
+end
+
+def test_er_entities():
+  let names = map(mermaid_parse(_er())["entities"], fn(e): e["name"];)
+  | assert_eq(names, ["CUSTOMER", "ORDER", "ITEM", "LONELY"])
+end
+
+def test_er_relation_fields():
+  let r = first(mermaid_parse(_er())["relations"])
+  | assert_eq(r["from"], "CUSTOMER")
+  | assert_eq(r["to"], "ORDER")
+  | assert_eq(r["left"], "||")
+  | assert_eq(r["line"], "--")
+  | assert_eq(r["right"], "o{")
+  | assert_eq(r["label"], "places")
+end
+
+def test_er_non_identifying_and_quoted_label():
+  let r = last(mermaid_parse(_er())["relations"])
+  | assert_eq(r["line"], "..")
+  | assert_eq(r["left"], "}|")
+  | assert_eq(r["right"], "|{")
+  | assert_eq(r["label"], "is in")
+end
+
+def test_er_attributes():
+  let attrs = first(mermaid_parse(_er())["entities"])["attributes"]
+  | assert_len(attrs, 2)
+  | assert_eq(attrs[0]["type"], "string")
+  | assert_eq(attrs[1]["keys"], ["PK", "FK"])
+  | assert_eq(attrs[1]["comment"], "the key")
+end
+
+def test_er_hyphenated_names():
+  let r = first(mermaid_parse("erDiagram\n  PRODUCT ||--o{ LINE-ITEM : in")["relations"])
+  | assert_eq(r["to"], "LINE-ITEM")
+end
+
+def test_er_relation_without_label():
+  assert_eq(first(mermaid_parse("erDiagram\n  A ||--|| B")["relations"])["label"], "")
+end
+
+def test_er_roundtrip():
+  let parsed = mermaid_parse(_er())
+  | assert_eq(mermaid_parse(mermaid_stringify(parsed)), parsed)
+end
+
+def test_svg_er():
+  let svg = mermaid_to_svg(_er())
+  | assert_contains(svg, ">CUSTOMER</text>")
+  | assert_contains(svg, ">places</text>")
+  | assert_contains(svg, ">string</text>")
+  | assert_contains(svg, ">PK,FK</text>")
+  | assert_contains(svg, "stroke-dasharray")
+end
+
+# -- gantt --
+
+def _gantt():
+  "gantt\n  title Plan\n  dateFormat YYYY-MM-DD\n  section Design\n  Research :done, a1, 2024-01-01, 2024-01-10\n  Prototype :active, a2, after a1, 5d\n  section Build\n  Backend :crit, 2024-02-26, 1w\n  Next :3d\n  Launch :milestone, m1, 2024-03-15, 0d"
+end
+
+def _tasks():
+  fold(mermaid_parse(_gantt())["sections"], [], fn(acc, s): acc + s["tasks"];)
+end
+
+def test_gantt_type_title_sections():
+  let g = mermaid_parse(_gantt())
+  | assert_eq(g["type"], "gantt")
+  | assert_eq(g["title"], "Plan")
+  | assert_eq(map(g["sections"], fn(s): s["name"];), ["Design", "Build"])
+end
+
+def test_gantt_explicit_dates():
+  let t = first(_tasks())
+  | assert_eq(t["name"], "Research")
+  | assert_eq(t["id"], "a1")
+  | assert_eq(t["tags"], ["done"])
+  | assert_eq(t["start"], "2024-01-01")
+  | assert_eq(t["end"], "2024-01-10")
+end
+
+def test_gantt_after_and_duration():
+  let t = _tasks()[1]
+  | assert_eq(t["start"], "2024-01-10")
+  | assert_eq(t["end"], "2024-01-15")
+end
+
+def test_gantt_weeks_across_leap_day():
+  let t = _tasks()[2]
+  | assert_eq(t["start"], "2024-02-26")
+  | assert_eq(t["end"], "2024-03-04")
+end
+
+def test_gantt_task_after_previous_by_default():
+  let t = _tasks()[3]
+  | assert_eq(t["name"], "Next")
+  | assert_eq(t["start"], "2024-03-04")
+  | assert_eq(t["end"], "2024-03-07")
+end
+
+def test_gantt_milestone():
+  let t = last(_tasks())
+  | assert_eq(t["tags"], ["milestone"])
+  | assert_eq(t["start"], t["end"])
+end
+
+def test_gantt_days_roundtrip():
+  assert_eq(_mm_civil(_mm_days(2024, 2, 29)), [2024, 2, 29])
+  | assert_eq(_mm_date_str(_mm_days(2000, 12, 31) + 1), "2001-01-01")
+  | assert_eq(_mm_days(1970, 1, 1), 0)
+end
+
+def test_gantt_ignores_settings_lines():
+  assert_len(_tasks(), 5)
+end
+
+def test_gantt_unparsable_task_is_skipped():
+  let g = mermaid_parse("gantt\n  Bad :after nothing, 3d\n  Good :2024-01-01, 2d")
+  | assert_len(first(g["sections"])["tasks"], 1)
+end
+
+def test_gantt_roundtrip():
+  let parsed = mermaid_parse(_gantt())
+  | assert_eq(mermaid_parse(mermaid_stringify(parsed)), parsed)
+end
+
+def test_svg_gantt():
+  let svg = mermaid_to_svg(_gantt())
+  | assert_contains(svg, ">Plan</text>")
+  | assert_contains(svg, ">Research</text>")
+  | assert_contains(svg, ">Design</text>")
+  | assert_contains(svg, "<polygon")
+end
+
+def test_svg_gantt_without_tasks():
+  assert_contains(mermaid_to_svg("gantt\n  title Empty"), ">Empty</text>")
+end
+
+# -- flowchart: links --
+
+def _ops_of(src):
+  map(mermaid_parse(src)["edges"], fn(e): e["op"];)
+end
+
+def test_flow_default_op_is_arrow():
+  assert_eq(_ops_of("graph LR\n  A --> B"), ["-->"])
+end
+
+def test_flow_all_link_operators():
+  assert_eq(
+    _ops_of("graph LR\n  A --- B\n  A ==> B\n  A === B\n  A -.-> B\n  A -.- B\n  A <--> B\n  A --x B\n  A --o B"),
+    ["---", "==>", "===", "-.->", "-.-", "<-->", "--x", "--o"]
+  )
+end
+
+def test_flow_link_operators_without_spaces():
+  let r = mermaid_parse("graph LR\n  A-->B\n  B---C\n  C==>D")
+  | assert_eq(map(r["edges"], fn(e): e["op"];), ["-->", "---", "==>"])
+  | assert_len(r["nodes"], 4)
+end
+
+def test_flow_pipe_label_on_each_operator():
+  let r = mermaid_parse("graph LR\n  A ==>|big| B\n  B -.->|maybe| C\n  C ---|plain| D")
+  | assert_eq(map(r["edges"], fn(e): e["label"];), ["big", "maybe", "plain"])
+end
+
+def test_flow_text_in_line_labels():
+  let r = mermaid_parse("graph LR\n  A -- yes --> B\n  B == strong ==> C\n  C -. rare .-> D\n  D -- plain --- E")
+  | assert_eq(map(r["edges"], fn(e): e["label"];), ["yes", "strong", "rare", "plain"])
+  | assert_eq(map(r["edges"], fn(e): e["op"];), ["-->", "==>", "-.->", "---"])
+end
+
+def test_flow_chain():
+  let r = mermaid_parse("graph LR\n  A --> B --> C -->|x| D")
+  | assert_eq(map(r["edges"], fn(e): e["from"] + e["to"];), ["AB", "BC", "CD"])
+  | assert_eq(last(r["edges"])["label"], "x")
+end
+
+def test_flow_ampersand_groups():
+  let r = mermaid_parse("graph TD\n  A & B --> C & D")
+  | assert_eq(map(r["edges"], fn(e): e["from"] + e["to"];), ["AC", "AD", "BC", "BD"])
+end
+
+def test_flow_ampersand_inside_label_is_kept():
+  let n = first(mermaid_parse("graph TD\n  A[a & b] --> B")["nodes"])
+  | assert_eq(n["label"], "a & b")
+end
+
+def test_flow_chain_with_labels_in_nodes():
+  let r = mermaid_parse("graph LR\n  A[Start here] --> B{Is it ok?} --> C(Done now)")
+  | assert_eq(map(r["nodes"], fn(n): n["label"];), ["Start here", "Is it ok?", "Done now"])
+end
+
+def test_flow_class_shorthand_is_ignored():
+  let r = mermaid_parse("graph LR\n  A:::hot --> B:::cold")
+  | assert_eq(map(r["nodes"], fn(n): n["id"];), ["A", "B"])
+end
+
+def test_flow_bare_node_line():
+  assert_len(mermaid_parse("graph LR\n  A\n  B")["nodes"], 2)
+end
+
+def test_flow_later_label_replaces_bare_mention():
+  let r = mermaid_parse("graph LR\n  A --> B\n  B[Beta]")
+  | assert_eq(last(r["nodes"])["label"], "Beta")
+  | assert_len(r["nodes"], 2)
+end
+
+def test_flow_bare_mention_keeps_label():
+  let r = mermaid_parse("graph LR\n  A[Alpha] --> B\n  A --> C")
+  | assert_eq(first(r["nodes"])["label"], "Alpha")
+end
+
+def test_flow_ignored_statements():
+  let r = mermaid_parse("graph LR\n  A --> B\n  style A fill:#f9f\n  classDef x fill:#fff\n  linkStyle 0 stroke:red\n  click A callback")
+  | assert_len(r["nodes"], 2)
+  | assert_len(r["edges"], 1)
+end
+
+# -- flowchart: shapes --
+
+def test_flow_cylinder_subroutine_hexagon():
+  let r = mermaid_parse("graph LR\n  A[(Database)] --> B[[Sub]] --> C{{Hex}}")
+  | assert_eq(map(r["nodes"], fn(n): n["shape"];), ["cylinder", "subroutine", "hexagon"])
+  | assert_eq(map(r["nodes"], fn(n): n["label"];), ["Database", "Sub", "Hex"])
+end
+
+def test_flow_new_shapes_roundtrip():
+  let parsed = mermaid_parse("graph LR\n  A[(Database)] --> B[[Sub]]\n  B --> C{{Hex}}")
+  | assert_eq(mermaid_parse(mermaid_stringify(parsed)), parsed)
+end
+
+# -- flowchart: subgraphs --
+
+def _subgraphs():
+  "graph TD\n  subgraph one [First group]\n    A --> B\n  end\n  subgraph two\n    C\n    subgraph inner [Inner]\n      D\n    end\n  end\n  B --> C\n  E"
+end
+
+def test_flow_subgraph_titles_and_ids():
+  let sgs = mermaid_parse(_subgraphs())["subgraphs"]
+  | assert_eq(map(sgs, fn(g): g["id"];), ["one", "two", "inner"])
+  | assert_eq(map(sgs, fn(g): g["title"];), ["First group", "two", "Inner"])
+end
+
+def test_flow_subgraph_members():
+  let sgs = mermaid_parse(_subgraphs())["subgraphs"]
+  | assert_eq(sgs[0]["nodes"], ["A", "B"])
+  | assert_eq(sgs[1]["nodes"], ["C"])
+  | assert_eq(sgs[2]["nodes"], ["D"])
+end
+
+def test_flow_subgraph_nesting():
+  let sgs = mermaid_parse(_subgraphs())["subgraphs"]
+  | assert_eq(map(sgs, fn(g): g["parent"];), ["", "", "two"])
+end
+
+def test_flow_node_after_end_is_not_a_member():
+  let r = mermaid_parse(_subgraphs())
+  | assert_eq(any(r["subgraphs"], fn(g): any(g["nodes"], fn(k): k == "E";);), false)
+  | assert_len(r["nodes"], 5)
+end
+
+def test_flow_subgraph_title_with_spaces():
+  let g = first(mermaid_parse("graph TD\n  subgraph My Group\n    A\n  end")["subgraphs"])
+  | assert_eq(g["title"], "My Group")
+  | assert_eq(g["id"], "My_Group")
+end
+
+def test_flow_without_subgraphs_has_empty_list():
+  assert_eq(mermaid_parse("graph LR\n  A --> B")["subgraphs"], [])
+end
+
+def test_flow_subgraph_roundtrip():
+  let parsed = mermaid_parse(_subgraphs())
+  | let rt     = mermaid_parse(mermaid_stringify(parsed))
+  | assert_eq(rt["subgraphs"], parsed["subgraphs"])
+  | assert_eq(rt["edges"], parsed["edges"])
+end
+
+def test_flow_stringify_keeps_op_and_label():
+  let out = mermaid_stringify(mermaid_parse("graph LR\n  A ==>|go| B\n  B -.-> C"))
+  | assert_contains(out, "A ==>|go| B")
+  | assert_contains(out, "B -.-> C")
+end
+
+# -- flowchart: svg --
+
+def test_svg_flow_op_styles():
+  let svg = mermaid_to_svg("graph LR\n  A --- B\n  B ==> C\n  C -.-> D\n  D --x E\n  E --o F\n  F <--> G")
+  | assert_contains(svg, "stroke-width:3.5")
+  | assert_contains(svg, "stroke-dasharray=\"2 4\"")
+  | assert_contains(svg, "marker-end=\"url(#mm-cross)\"")
+  | assert_contains(svg, "marker-end=\"url(#mm-circle)\"")
+  | assert_contains(svg, "marker-start=\"url(#mm-arrow)\"")
+end
+
+def test_svg_flow_open_link_has_no_marker():
+  let svg = mermaid_to_svg("graph LR\n  A --- B")
+  | assert_eq(contains(svg, "<line x1") && contains(svg, "marker-end=\"url(#mm-arrow)\" "), false)
+end
+
+def test_svg_flow_new_shapes():
+  let svg = mermaid_to_svg("graph LR\n  A[(Db)] --> B[[Sub]] --> C{{Hex}}")
+  | assert_contains(svg, ">Db</text>")
+  | assert_contains(svg, " A ")
+  | assert_contains(svg, "<polygon")
+end
+
+def test_svg_flow_subgraph_rect_and_title():
+  let svg = mermaid_to_svg(_subgraphs())
+  | assert_contains(svg, "class=\"mm-group\"")
+  | assert_contains(svg, ">First group</text>")
+  | assert_contains(svg, ">Inner</text>")
+end
+
+def test_svg_flow_group_rects_are_drawn_before_nodes():
+  let svg = mermaid_to_svg("graph TD\n  subgraph g [Group]\n    A --> B\n  end")
+  | assert_eq(index(svg, "mm-group") < index(svg, ">A</text>"), true)
+end
+
+def test_svg_flow_edge_detours_around_a_node_in_the_way():
+  # A -> C passes straight through B, so it is drawn as a curve.
+  let svg = mermaid_to_svg("graph TD\n  A --> B\n  B --> C\n  A --> C")
+  | assert_contains(svg, " Q ")
+end
+
+def test_svg_flow_no_detour_when_nothing_is_in_the_way():
+  assert_eq(contains(mermaid_to_svg("graph TD\n  A --> B"), " Q "), false)
+end
+
+def test_svg_flow_ampersand_and_chain_render_every_edge():
+  let svg = mermaid_to_svg("graph LR\n  A & B --> C --> D")
+  | let needle = "marker-end=\"url(#mm-arrow)\""
+  | assert_eq((len(svg) - len(replace(svg, needle, ""))) / len(needle), 3)
 end

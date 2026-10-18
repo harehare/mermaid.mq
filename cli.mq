@@ -1,0 +1,2 @@
+include "mermaid"
+| mermaid_run(self, try: ARGS["named"] catch: {}, try: __FILE__ catch: None)
