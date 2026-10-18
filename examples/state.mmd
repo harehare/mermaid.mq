@@ -1,0 +1,8 @@
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Running : start
+  Running --> Idle : stop
+  Running --> Failed : error
+  Failed --> Idle : reset
+  Failed --> [*]
+  state "Out of order" as Failed
