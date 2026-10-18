@@ -2,7 +2,7 @@
 
 Render [Mermaid](https://mermaid.js.org/) diagrams to SVG with [mq](https://github.com/harehare/mq). No Node, no browser.
 
-It also parses diagrams into data and writes them back, and it works on Markdown: extract the Mermaid blocks of a document, or replace them with SVG images.
+It can also draw diagrams as plain text for the terminal, parse them into data and write them back, and it works on Markdown: extract the Mermaid blocks of a document, or replace them with SVG images or text.
 
 <p align="center">
   <img src="examples/flowchart.svg" alt="flowchart" height="240">
@@ -31,6 +31,25 @@ mq -I raw mermaid.mqc --args nth 2 doc.md -o second.svg        # 2nd mermaid blo
 cat flow.mmd | mq -I raw mermaid.mqc > flow.svg                 # stdin works too
 ```
 
+Draw it as text in the terminal:
+
+```sh
+mq -I raw mermaid.mqc --args mode text examples/sequence.mmd
+```
+
+```
+┌───────┐  ┌─────────────────┐
+│ Alice │  │ Bob the Builder │
+└───┬───┘  └────────┬────────┘
+    │               │
+    │  Hello Bob!   │
+    ├──────────────>│
+    │               │
+    │   Hi Alice!   │
+    │<┄┄┄┄┄┄┄┄┄┄┄┄┄┄┤
+...
+```
+
 Pick a theme:
 
 ```sh
@@ -55,9 +74,11 @@ docs/guide-1.svg   the rendered diagram
 
 | Argument | Description |
 |---|---|
-| `--args mode M` | `svg` (default), `extract`, `parse`, `render` or `files` |
+| `--args mode M` | `svg` (default), `text`, `extract`, `parse`, `render` or `files` |
 | `--args nth N` | Diagram to use for `svg`, `extract` and `parse` (1 based, default 1) |
 | `--args theme T` | `light` (default), `dark` or `auto` |
+| `--args ascii true` | `text` and `render` with `format text`: draw with plain ASCII (`+`, `-`, `#`) instead of box drawing characters |
+| `--args format text` | `render`: replace blocks with fenced text instead of inline SVG |
 | `--args out_dir D` | `files`: directory for the `.svg` files, which must exist. Default: the directory of the input |
 | `--args link_dir D` | `files`: directory used in the image links. Default: none, or `out_dir` when it is given |
 | `--args name N` | `files`: file name prefix (`N-1.svg`, `N-2.svg`, ...). Default: the input file name without extension |
@@ -68,9 +89,10 @@ The input is a Markdown document (its mermaid blocks are used) or a single diagr
 | Mode | Output |
 |---|---|
 | `svg` | the SVG of one diagram |
+| `text` | one diagram drawn as plain text |
 | `extract` | the source of every block, or of block `nth` |
 | `parse` | the parsed diagram. Add `-F json` for JSON |
-| `render` | the Markdown with every block replaced by an inline SVG |
+| `render` | the Markdown with every block replaced by an inline SVG, or by a `text` code block with `--args format text` |
 | `files` | the Markdown with every block replaced by an image link. Writes the `.svg` files |
 
 A block that cannot be rendered (an unsupported diagram type or a syntax error) is left as it is. In `files` mode it keeps its number, so `guide-3.svg` is still the third block when the second one was skipped.
@@ -88,6 +110,46 @@ A block that cannot be rendered (an unsupported diagram type or a syntax error) 
 | Pie chart | Title and labeled slices |
 
 Anything else is parsed as `{ type, raw_lines }` and cannot be rendered.
+
+### Text output
+
+`mode text` draws a diagram with box drawing characters, so it can be read in a terminal, a commit message or an LLM prompt. CJK characters count as two columns, so boxes stay aligned. Use `--args ascii true` for terminals and fonts without box drawing characters.
+
+```sh
+mq -I raw mermaid.mqc --args mode text examples/flowchart.mmd
+```
+
+```
+       ┌───────┐
+       │ Start │
+       └───────┘
+           │
+           │
+           │
+           v
+ ┌───────────────────┐
+ │ {Is it working?}  │
+ └───────────────────┘
+           │ ^
+     ┌─Yes─┤ │
+     │     └─┼No───┐
+     │       └─────┼──────┐
+     │             │      │
+     v             v      │
+  ...
+```
+
+| Diagram | Text output |
+|---|---|
+| Flowchart | boxes in layers joined by lines with arrowheads (`>` `v` `<` `^`, `x`, `o`) and labels. `TD` and `LR`. Shapes are shown with their Mermaid brackets, such as `{Choice}`, `((Circle))` and `[(Db)]` |
+| State diagram | rounded boxes, `●` for the start and `◉` for the end |
+| Class diagram | boxes with `△` (inheritance), `◆` (composition) and `◇` (aggregation) at the end of the line |
+| ER diagram | entity boxes with their attributes, and cardinalities (`1`, `0..1`, `0..*`, `1..*`) at both ends of a relation |
+| Sequence diagram | participant boxes, lifelines, solid and dashed arrows, `>` and `x` heads, messages to self |
+| Pie chart | one bar per slice with percentage and value |
+| Gantt chart | a date axis and one bar per task, with a different character for `done`, `active`, `crit` and `milestone` |
+
+Text output has a few limits: `RL` is drawn as `LR` and `BT` as `TD`, subgraphs are not drawn, and thick and dotted lines look like plain ones. An edge that does not go to the next layer runs in a lane beside the diagram. Diagrams that cannot be drawn as text (such as `journey`) raise an error. With `render` and `--args format text` they are left as they are.
 
 ### Theming
 
@@ -136,9 +198,11 @@ mq --allow-http-import -I raw 'import "github.com/harehare/mermaid.mq" | mermaid
 |---|---|
 | `mermaid_to_svg(x)` | SVG string for Mermaid text or a parsed diagram |
 | `mermaid_to_svg_with(x, opts)` | Same with options. `{"theme": "light" \| "dark" \| "auto"}` |
+| `mermaid_to_text(x)` | Plain text drawing of a diagram |
+| `mermaid_to_text_with(x, opts)` | Same with options. `{"ascii": true}` |
 | `mermaid_extract(md)` | Array with the source of every mermaid block of a Markdown string |
 | `mermaid_render_markdown(md)` | Markdown with every block replaced by an inline SVG |
-| `mermaid_render_markdown_with(md, opts)` | Same with options |
+| `mermaid_render_markdown_with(md, opts)` | Same with options. `{"format": "text"}` uses text code blocks instead of SVG |
 | `mermaid_svgs(md, opts)` | One SVG per block, or `None` for a block that cannot be rendered |
 | `mermaid_link_markdown(md, path_fn, opts)` | Markdown with each renderable block replaced by `![Mermaid diagram N](path_fn(N))`. `N` counts all blocks from 1 |
 | `mermaid_parse(text)` | Structured data, see below |

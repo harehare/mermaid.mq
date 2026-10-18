@@ -1294,3 +1294,272 @@ def test_svg_flow_ampersand_and_chain_render_every_edge():
   | let needle = "marker-end=\"url(#mm-arrow)\""
   | assert_eq((len(svg) - len(replace(svg, needle, ""))) / len(needle), 3)
 end
+
+# -- text rendering --
+
+def _lines(s): split(s, "\n");
+
+def test_text_pie():
+  assert_eq(
+    mermaid_to_text("pie title T\n  \"a\" : 1\n  \"bb\" : 3"),
+    "T\n\na   ████████                        25% (1)\nbb  ███████████████████████         75% (3)"
+  )
+end
+
+def test_text_pie_without_title():
+  assert_eq(first(_lines(mermaid_to_text("pie\n  \"a\" : 1"))), "a  ██████████████████████████████ 100% (1)")
+end
+
+def test_text_pie_cjk_label_alignment():
+  let ls = _lines(mermaid_to_text("pie\n  \"日本\" : 1\n  \"b\" : 1"))
+  | let bar_col = fn(l): _mm_cols(first(split(l, "█")));
+  | assert_eq(bar_col(ls[0]), 6)
+  | assert_eq(bar_col(ls[1]), 6)
+end
+
+def test_text_sequence():
+  assert_eq(
+    mermaid_to_text("sequenceDiagram\n  Alice->>Bob: Hi\n  Bob-->>Alice: Yo"),
+    "┌───────┐  ┌─────┐\n│ Alice │  │ Bob │\n└───┬───┘  └──┬──┘\n    │         │\n    │   Hi    │\n    ├────────>│\n    │         │\n    │   Yo    │\n    │<┄┄┄┄┄┄┄┄┤\n    │         │\n┌───┴───┐  ┌──┴──┐\n│ Alice │  │ Bob │\n└───────┘  └─────┘"
+  )
+end
+
+def test_text_sequence_ascii():
+  let out = mermaid_to_text_with("sequenceDiagram\n  Alice->>Bob: Hi\n  Bob-->>Alice: Yo", {"ascii": true})
+  | assert_contains(out, "+-------->|")
+  | assert_contains(out, "|<........+")
+  | assert_eq(is_regex_match(out, "[─│┌┐└┘├┤┬┴┄]"), false)
+end
+
+def test_text_sequence_cross_and_open_arrows():
+  let out = mermaid_to_text("sequenceDiagram\n  A -x B: no\n  B -> A: plain")
+  | assert_contains(out, "x│")
+  | assert_contains(out, "│────")
+end
+
+def test_text_sequence_self_message():
+  let out = mermaid_to_text("sequenceDiagram\n  A ->> A: Think")
+  | assert_contains(out, "├─┐ Think")
+  | assert_contains(out, "│<┘")
+end
+
+def test_text_sequence_wide_message_widens_columns():
+  let out = mermaid_to_text("sequenceDiagram\n  A ->> B: a rather long message text")
+  | assert_contains(out, "a rather long message text")
+  | assert_contains(out, "├──")
+end
+
+def test_text_sequence_cjk_boxes_are_aligned():
+  let ls = _lines(mermaid_to_text("sequenceDiagram\n  participant 日本語\n  participant B\n  日本語->>B: こんにちは"))
+  | assert_eq(_mm_cols(ls[0]) == _mm_cols(ls[1]) && _mm_cols(ls[1]) == _mm_cols(ls[2]), true)
+end
+
+def test_text_sequence_every_row_has_lifelines_at_same_columns():
+  let ls = _lines(mermaid_to_text("sequenceDiagram\n  A ->> B: x\n  B -->> C: y"))
+  | let col = fn(l): index(l, "│");
+  | assert_eq(col(ls[3]), col(ls[6]))
+end
+
+def test_text_gantt():
+  let out = mermaid_to_text(_gantt())
+  | assert_contains(out, "Plan")
+  | assert_contains(out, "Research")
+  | assert_contains(out, "Design")
+  | assert_contains(out, "◆")
+  | assert_contains(out, "█ task  ░ done  ▒ active  ▓ crit  ◆ milestone")
+end
+
+def test_text_gantt_bars_use_tag_characters():
+  let ls = _lines(mermaid_to_text("gantt\n  A :done, 2024-01-01, 5d\n  B :crit, 2024-01-06, 5d"))
+  | assert_contains(ls[2], "░")
+  | assert_contains(ls[3], "▓")
+end
+
+def test_text_gantt_ascii():
+  let out = mermaid_to_text_with(_gantt(), {"ascii": true})
+  | assert_contains(out, "# task  . done  = active  ! crit  * milestone")
+  | assert_eq(is_regex_match(out, "[█░▒▓◆│]"), false)
+end
+
+def test_text_gantt_without_tasks():
+  assert_eq(mermaid_to_text("gantt\n  title Empty"), "Empty")
+end
+
+def test_text_unsupported_type_errors():
+  let r = try: mermaid_to_text("journey\n  title x") catch: "error"
+  | assert_eq(r, "error")
+end
+
+def test_text_accepts_parsed_diagram():
+  assert_eq(mermaid_to_text(mermaid_parse(_pie())), mermaid_to_text(_pie()))
+end
+
+def test_render_markdown_text_format():
+  let out = mermaid_render_markdown_with("```mermaid\npie\n  \"a\" : 1\n```\n", {"format": "text"})
+  | assert_contains(out, "```text\na  ")
+  | assert_eq(contains(out, "<svg"), false)
+  | assert_eq(contains(out, "```mermaid"), false)
+end
+
+def test_render_markdown_text_format_keeps_unsupported_blocks():
+  let md = "```mermaid\njourney\n  title x\n```\n"
+  | assert_eq(mermaid_render_markdown_with(md, {"format": "text"}), md)
+end
+
+def test_run_text_mode():
+  assert_contains(mermaid_run(_seq(), {"mode": "text"}, None), "│ Alice │")
+end
+
+def test_run_text_mode_ascii():
+  assert_contains(mermaid_run(_seq(), {"mode": "text", "ascii": "true"}, None), "| Alice |")
+end
+
+def test_run_render_with_text_format():
+  let out = mermaid_run(_doc(), {"mode": "render", "format": "text"}, None)
+  | assert_contains(out, "```text")
+end
+
+# -- text rendering: graphs --
+
+def _has_box(text, name): contains(text, "│ " + name + " │");
+
+def test_text_flowchart_td():
+  assert_eq(
+    mermaid_to_text("graph TD\n  A --> B"),
+    "┌───┐\n│ A │\n└───┘\n  │\n  │\n  │\n  v\n┌───┐\n│ B │\n└───┘"
+  )
+end
+
+def test_text_flowchart_lr():
+  let ls = _lines(mermaid_to_text("graph LR\n  A --> B"))
+  | assert_eq(ls[1], "│ A │────>│ B │")
+end
+
+def test_text_flowchart_ascii():
+  let out = mermaid_to_text_with("graph TD\n  A --> B", {"ascii": true})
+  | assert_contains(out, "+---+")
+  | assert_contains(out, "  v")
+  | assert_eq(is_regex_match(out, "[─│┌┐└┘]"), false)
+end
+
+def test_text_flowchart_edge_label_on_the_line():
+  assert_contains(mermaid_to_text("graph LR\n  A -->|go| B"), "─go─")
+end
+
+def test_text_flowchart_node_shapes():
+  let out = mermaid_to_text("graph TD\n  A((Circle)) --> B{Choice}\n  B --> C[(Db)]\n  C --> D(Round)")
+  | assert_contains(out, "((Circle))")
+  | assert_contains(out, "{Choice}")
+  | assert_contains(out, "[(Db)]")
+  | assert_contains(out, "╭")
+end
+
+def test_text_flowchart_link_ends():
+  let out = mermaid_to_text("graph LR\n  A --- B\n  B --x C\n  C --o D\n  D <--> E")
+  | assert_contains(out, "x")
+  | assert_contains(out, "o")
+  | assert_contains(out, "<")
+  | assert_contains(out, ">")
+end
+
+def test_text_flowchart_open_link_has_no_arrowhead():
+  assert_eq(contains(mermaid_to_text("graph TD\n  A --- B"), "v"), false)
+end
+
+def test_text_flowchart_draws_every_node():
+  let out = mermaid_to_text("graph TD\n  A --> B\n  A --> C\n  B --> D\n  C --> D")
+  | assert_eq(map(["A", "B", "C", "D"], fn(n): _has_box(out, n);), [true, true, true, true])
+end
+
+def test_text_flowchart_branches_share_junctions():
+  let out = mermaid_to_text("graph TD\n  A --> B\n  A --> C")
+  | assert_contains(out, "┤")
+end
+
+def test_text_flowchart_cycle_and_self_loop_terminate():
+  let out = mermaid_to_text("graph TD\n  A --> B\n  B --> C\n  C --> A\n  B --> B")
+  | assert_eq(map(["A", "B", "C"], fn(n): _has_box(out, n);), [true, true, true])
+  | assert_contains(out, "^")
+end
+
+def test_text_flowchart_edge_that_skips_a_layer_goes_around():
+  let out = mermaid_to_text("graph TD\n  A --> B\n  B --> C\n  A --> C")
+  | assert_eq(map(["A", "B", "C"], fn(n): _has_box(out, n);), [true, true, true])
+  | assert_contains(out, "┐")
+end
+
+def test_text_flowchart_lines_never_cross_boxes():
+  let out = mermaid_to_text("graph TD\n  A --> B\n  B --> C\n  A --> C")
+  | assert_contains(out, "│ B │")
+end
+
+def test_text_flowchart_cjk_labels_keep_boxes_aligned():
+  let ls = _lines(mermaid_to_text("graph TD\n  A[日本語] --> B[こんにちは]"))
+  | assert_eq(_mm_cols(ls[0]) == _mm_cols(ls[1]) && _mm_cols(ls[1]) == _mm_cols(ls[2]), true)
+end
+
+def test_text_flowchart_rl_is_drawn_left_to_right():
+  assert_eq(mermaid_to_text("graph RL\n  A --> B"), mermaid_to_text("graph LR\n  A --> B"))
+end
+
+def test_text_state():
+  let out = mermaid_to_text(_state())
+  | assert_contains(out, "●")
+  | assert_contains(out, "◉")
+  | assert_contains(out, "Still")
+  | assert_contains(out, "push")
+  | assert_contains(out, "Out of order")
+end
+
+def test_text_state_ascii_markers():
+  let out = mermaid_to_text_with(_state(), {"ascii": true})
+  | assert_contains(out, "*")
+  | assert_contains(out, "@")
+end
+
+def test_text_class():
+  let out = mermaid_to_text(_class())
+  | assert_contains(out, "Animal")
+  | assert_contains(out, "Dog")
+  | assert_contains(out, "inherits")
+  | assert_contains(out, "△")
+end
+
+def test_text_class_markers():
+  let out = mermaid_to_text("classDiagram\n  A *-- B\n  C --o D")
+  | assert_contains(out, "◆")
+  | assert_contains(out, "◇")
+end
+
+def test_text_er():
+  let out = mermaid_to_text(_er())
+  | assert_contains(out, "CUSTOMER")
+  | assert_contains(out, "string name")
+  | assert_contains(out, "string id PK,FK")
+  | assert_contains(out, "places")
+  | assert_contains(out, "1")
+  | assert_contains(out, "0..*")
+end
+
+def test_text_er_entity_rows_are_boxed():
+  let ls = _lines(mermaid_to_text("erDiagram\n  A {\n    int id PK\n  }"))
+  | assert_eq(ls[0], "┌───────────┐")
+  | assert_eq(ls[2], "├───────────┤")
+  | assert_eq(ls[3], "│ int id PK │")
+end
+
+def test_text_run_mode_for_graphs():
+  assert_contains(mermaid_run("graph TD\n  A --> B", {"mode": "text"}, None), "│ A │")
+end
+
+def test_class_relation_with_trailing_o_marker():
+  let r = first(mermaid_parse("classDiagram\n  C --o D")["relations"])
+  | assert_eq(r["rel"], "--o")
+  | assert_eq(r["to"], "D")
+end
+
+def test_class_relation_with_leading_o_marker():
+  let r = first(mermaid_parse("classDiagram\n  C o-- D")["relations"])
+  | assert_eq(r["rel"], "o--")
+  | assert_eq(r["from"], "C")
+end

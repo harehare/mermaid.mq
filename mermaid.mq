@@ -332,9 +332,9 @@ def _mm_parse_class_line(line, cls_list, rel_list):
           else:
             [cls_list + [{"name": nm, "members": []}], rel_list]
       end
-    elif (is_regex_match(l, "[A-Za-z0-9_]+\\s*(--|<\\|--|\\|>--|\\*--|--\\*|o--|--o)\\s*[A-Za-z0-9_]+")):
+    elif (is_regex_match(l, "[A-Za-z0-9_]+\\s*(<\\|--|\\|>--|\\*--|--\\*|--o|o--|--)\\s*[A-Za-z0-9_]+")):
       do
-        let m     = capture(l, "(?P<from>[A-Za-z0-9_]+)\\s*(?P<rel>--|<\\|--|\\|>--|\\*--|--\\*|o--|--o)\\s*(?P<to>[A-Za-z0-9_]+)(?:\\s*:\\s*(?P<label>.+))?")
+        let m     = capture(l, "(?P<from>[A-Za-z0-9_]+)\\s*(?P<rel><\\|--|\\|>--|\\*--|--\\*|--o|o--|--)\\s*(?P<to>[A-Za-z0-9_]+)(?:\\s*:\\s*(?P<label>.+))?")
         | let lbl = if (is_none(m["label"])): "" else: trim(m["label"])
         | [cls_list, rel_list + [{"from": m["from"], "to": m["to"], "rel": m["rel"], "label": lbl}]]
       end
@@ -1494,9 +1494,11 @@ end
 # ─── gantt renderer ───────────────────────────────────────────────────────────
 
 # Smallest tick step (in days) that gives at most 12 ticks.
-def _mm_gantt_step(span):
+def _mm_gantt_step(span): _mm_gantt_step_n(span, 12);
+
+def _mm_gantt_step_n(span, max_ticks):
   let steps = [1, 2, 7, 14, 30, 60, 90, 180, 365, 730, 1825]
-  | let ok = filter(steps, fn(k): span / k <= 12;)
+  | let ok = filter(steps, fn(k): span / k <= max_ticks;)
   | if (is_empty(ok)): last(steps) else: first(ok)
 end
 
@@ -1585,6 +1587,588 @@ def _mm_gantt_svg(d):
             + ["</svg>"]
           )
       end
+end
+
+# ─── text renderer ────────────────────────────────────────────────────────────
+# Draws diagrams as plain text, for terminals, docs and anything that cannot show images.
+
+def _mm_chars(s):
+  let parts = split(to_string(s), "")
+  | if (len(parts) < 3): [] else: slice(parts, 1, len(parts) - 1)
+end
+
+def _mm_is_wide(c):
+  is_regex_match(c, "[\\x{1100}-\\x{115F}\\x{2E80}-\\x{A4CF}\\x{AC00}-\\x{D7A3}\\x{F900}-\\x{FAFF}\\x{FE30}-\\x{FE6F}\\x{FF00}-\\x{FF60}\\x{FFE0}-\\x{FFE6}\\x{1F300}-\\x{1FAFF}]")
+end
+
+# Terminal columns of a string (CJK characters take two).
+def _mm_cols(s):
+  fold(_mm_chars(s), 0, fn(a, c): a + (if (_mm_is_wide(c)): 2 else: 1);)
+end
+
+# One cell per column; the second column of a wide character is an empty cell.
+def _mm_cells(s):
+  fold(_mm_chars(s), [], fn(a, c): if (_mm_is_wide(c)): a + [c, ""] else: a + [c];)
+end
+
+def _mm_pad_r(s, n): s + repeat(" ", max(n - _mm_cols(s), 0));
+def _mm_pad_l(s, n): repeat(" ", max(n - _mm_cols(s), 0)) + s;
+
+# A canvas is an array of rows, each an array of one-column cells.
+def _mm_cv_make(w, h, f):
+  map(range(0, h - 1, 1), fn(y): map(range(0, w - 1, 1), fn(x): f(x, y););)
+end
+
+def _mm_cv_put(cv, x, y, s):
+  let cells = _mm_cells(s)
+  | map(range(0, len(cv) - 1, 1), fn(j):
+      if (j == y && x >= 0):
+        slice(cv[j], 0, x) + cells + slice(cv[j], x + len(cells), len(cv[j]))
+      else:
+        cv[j]
+    ;)
+end
+
+def _mm_cv_text(cv):
+  gsub(join(map(cv, fn(r): gsub(join(r, ""), "\\s+$", "");), "\n"), "\\s+$", "")
+end
+
+def _mm_tchars(ascii_):
+  if (ascii_):
+    {"h": "-", "dash": ".", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+", "td": "+", "tu": "+", "tright": "+", "tleft": "+",
+     "full": "#", "done": ".", "active": "=", "crit": "!", "mile": "*", "tick": "|",
+     "rtl": "+", "rtr": "+", "rbl": "+", "rbr": "+", "start": "*", "end": "@", "tri": "^", "dia": "#", "odia": "o",
+     "lines": [" ", "|", "-", "+", "|", "|", "+", "+", "-", "+", "-", "+", "+", "+", "+", "+"]}
+  else:
+    {"h": "─", "dash": "┄", "v": "│", "tl": "┌", "tr": "┐", "bl": "└", "br": "┘", "td": "┬", "tu": "┴", "tright": "├", "tleft": "┤",
+     "full": "█", "done": "░", "active": "▒", "crit": "▓", "mile": "◆", "tick": "│",
+     "rtl": "╭", "rtr": "╮", "rbl": "╰", "rbr": "╯", "start": "●", "end": "◉", "tri": "△", "dia": "◆", "odia": "◇",
+     "lines": [" ", "│", "─", "└", "│", "│", "┌", "├", "─", "┘", "─", "┴", "┐", "┤", "┬", "┼"]}
+end
+
+# Three rows of a participant box. `top_tee` / `bot_tee` mark where the lifeline joins.
+def _mm_box_rows(alias, bw, ch, top_tee, bot_tee):
+  let c     = floor(bw / 2)
+  | let inner = bw - 2
+  | let pad   = inner - _mm_cols(alias)
+  | let lp    = floor(pad / 2)
+  | [
+      ch["tl"] + repeat(ch["h"], c - 1) + (if (top_tee): ch["tu"] else: ch["h"]) + repeat(ch["h"], bw - 2 - c) + ch["tr"],
+      ch["v"] + repeat(" ", lp) + alias + repeat(" ", pad - lp) + ch["v"],
+      ch["bl"] + repeat(ch["h"], c - 1) + (if (bot_tee): ch["td"] else: ch["h"]) + repeat(ch["h"], bw - 2 - c) + ch["br"]
+    ]
+end
+
+def _mm_seq_text(d, ch):
+  let parts = d["participants"]
+  | let msgs  = d["messages"]
+  | let n     = len(parts)
+  | if (n == 0):
+      ""
+    else:
+      do
+        let bw  = map(parts, fn(p): let w = _mm_cols(p["alias"]) + 4 | if (w == (floor(w / 2) * 2)): w + 1 else: w;)
+        | let idx = fold(range(0, n - 1, 1), {}, fn(acc, i): _mm_dset(acc, parts[i]["name"], i);)
+        | let base = if (n < 2): [] else: map(range(0, n - 2, 1), fn(i): floor((bw[i] + bw[i + 1]) / 2) + 2;)
+        | let gaps = fold(msgs, base, fn(g, m):
+            do
+              let a   = idx[m["from"]]
+              | let b   = idx[m["to"]]
+              | let lo  = min(a, b)
+              | let hi  = max(a, b)
+              | let need = _mm_cols(m["text"]) + 6
+              | let cur = fold(range(lo, hi - 1, 1), 0, fn(t, k): t + g[k];)
+              | if (hi == lo || cur >= need):
+                  g
+                else:
+                  map(range(0, len(g) - 1, 1), fn(k): if (k >= lo && k < hi): g[k] + ceil((need - cur) / (hi - lo)) else: g[k];)
+            end
+          ;)
+        | let cx = fold(range(1, n - 1, 1), [floor(bw[0] / 2)], fn(acc, i): acc + [last(acc) + gaps[i - 1]];)
+        | let self_w = fold(msgs, 0, fn(m, msg): if (msg["from"] == msg["to"]): max(m, cx[idx[msg["from"]]] + 6 + _mm_cols(msg["text"])) else: m;)
+        | let width  = max(last(cx) + floor(last(bw) / 2) + 1, self_w)
+        | let y_end  = 4 + (3 * len(msgs))
+        | let height = y_end + 3
+        | let is_life = fn(x, y): y >= 3 && y < y_end && any(cx, fn(c): c == x);
+        | let cv0 = _mm_cv_make(width, height, fn(x, y): if (is_life(x, y)): ch["v"] else: " ";)
+        | let cv1 = fold(range(0, n - 1, 1), cv0, fn(cv, i):
+            do
+              let top = _mm_box_rows(parts[i]["alias"], bw[i], ch, false, true)
+              | let bot = _mm_box_rows(parts[i]["alias"], bw[i], ch, true, false)
+              | let x   = cx[i] - floor(bw[i] / 2)
+              | let c1  = _mm_cv_put(_mm_cv_put(_mm_cv_put(cv, x, 0, top[0]), x, 1, top[1]), x, 2, top[2])
+              | _mm_cv_put(_mm_cv_put(_mm_cv_put(c1, x, y_end, bot[0]), x, y_end + 1, bot[1]), x, y_end + 2, bot[2])
+            end
+          ;)
+        | let cv2 = if (is_empty(msgs)): cv1 else: fold(range(0, len(msgs) - 1, 1), cv1, fn(cv, i):
+            do
+              let m     = msgs[i]
+              | let x1    = cx[idx[m["from"]]]
+              | let x2    = cx[idx[m["to"]]]
+              | let ya    = 4 + (3 * i)
+              | let yb    = ya + 1
+              | let arrow = m["arrow"]
+              | let fill  = if (starts_with(arrow, "--")): ch["dash"] else: ch["h"]
+              | let has_head = ends_with(arrow, ">>")
+              | let has_x    = ends_with(arrow, "x")
+              | if (x1 == x2):
+                  _mm_cv_put(_mm_cv_put(_mm_cv_put(cv, x1, ya, ch["tright"] + fill + ch["tr"]), x1 + 4, ya, m["text"]), x1 + 1, yb, "<" + ch["br"])
+                elif (x1 < x2):
+                  do
+                    let len_ = x2 - x1
+                    | let head = if (has_head): ">" elif (has_x): "x" else: fill
+                    | let line = ch["tright"] + repeat(fill, len_ - 2) + head
+                    | let start = x1 + 1 + max(floor((len_ - 1 - _mm_cols(m["text"])) / 2), 0)
+                    | _mm_cv_put(_mm_cv_put(cv, x1, yb, line), start, ya, m["text"])
+                  end
+                else:
+                  do
+                    let len_ = x1 - x2
+                    | let head = if (has_head): "<" elif (has_x): "x" else: fill
+                    | let line = head + repeat(fill, len_ - 2) + ch["tleft"]
+                    | let start = x2 + 1 + max(floor((len_ - 1 - _mm_cols(m["text"])) / 2), 0)
+                    | _mm_cv_put(_mm_cv_put(cv, x2 + 1, yb, line), start, ya, m["text"])
+                  end
+            end
+          ;)
+        | _mm_cv_text(cv2)
+      end
+end
+
+def _mm_pie_text(d, ch):
+  let slices = filter(d["slices"], fn(s): s["value"] > 0;)
+  | let ttl    = d["title"]
+  | let total  = fold(slices, 0, fn(a, s): a + s["value"];)
+  | let lw     = fold(slices, 0, fn(m, s): max(m, _mm_cols(s["label"]));)
+  | let bar_w  = 30
+  | let rows   = map(slices, fn(s):
+      do
+        let fr  = s["value"] / total
+        | let len_ = max(round(fr * bar_w), 1)
+        | _mm_pad_r(s["label"], lw) + "  " + _mm_pad_r(repeat(ch["full"], len_), bar_w) + " " + _mm_pad_l(to_string(round(fr * 100)) + "%", 4) + " (" + to_string(s["value"]) + ")"
+      end
+    ;)
+  | join((if (len(ttl) > 0): [ttl, ""] else: []) + rows, "\n")
+end
+
+def _mm_gantt_text(d, ch):
+  let ttl = d["title"]
+  | let all = fold(d["sections"], [], fn(acc, sec): acc + sec["tasks"];)
+  | if (is_empty(all)):
+      ttl
+    else:
+      do
+        let d0   = fold(all, 1000000, fn(m, t): min(m, _mm_date_days(t["start"]));)
+        | let d1   = fold(all, 0 - 1000000, fn(m, t): max(m, _mm_date_days(t["end"]));)
+        | let span = max(d1 - d0, 1)
+        | let rows = fold(d["sections"], [], fn(acc, sec):
+            acc + (if (sec["name"] == ""): [] else: [{"sec": sec["name"]}]) + map(sec["tasks"], fn(t): {"task": t};)
+          ;)
+        | let name_w = fold(rows, 0, fn(m, r): max(m, if (is_none(r["sec"])): _mm_cols(r["task"]["name"]) + 2 else: _mm_cols(r["sec"]));)
+        | let left  = name_w + 2
+        | let cw    = 60
+        | let scale = cw / span
+        | let step  = _mm_gantt_step_n(span, 8)
+        | let ticks = range(0, floor(span / step), 1)
+        | let cv0   = _mm_cv_make(left + cw + 8, len(rows) + 2, fn(x, y): " ";)
+        | let cv1   = fold(ticks, cv0, fn(cv, k):
+            do
+              let col = left + floor(k * step * scale)
+              | _mm_cv_put(_mm_cv_put(cv, col, 0, _mm_gantt_tick_label(d0 + (k * step), step)), col, 1, ch["tick"])
+            end
+          ;)
+        | let cv2 = fold(range(0, len(rows) - 1, 1), cv1, fn(cv, i):
+            do
+              let r = rows[i]
+              | let y = i + 2
+              | if (is_none(r["sec"])):
+                  do
+                    let t    = r["task"]
+                    | let s0   = _mm_date_days(t["start"])
+                    | let col  = left + floor((s0 - d0) * scale)
+                    | let w    = max(round((_mm_date_days(t["end"]) - s0) * scale), 1)
+                    | let tags = t["tags"]
+                    | let has  = fn(k): any(tags, fn(g): g == k;);
+                    | let c    = if (has("milestone")): ch["mile"] elif (has("crit")): ch["crit"] elif (has("done")): ch["done"] elif (has("active")): ch["active"] else: ch["full"]
+                    | _mm_cv_put(_mm_cv_put(cv, 2, y, t["name"]), col, y, if (has("milestone")): c else: repeat(c, w))
+                  end
+                else:
+                  _mm_cv_put(cv, 0, y, r["sec"])
+            end
+          ;)
+        | let legend = ch["full"] + " task  " + ch["done"] + " done  " + ch["active"] + " active  " + ch["crit"] + " crit  " + ch["mile"] + " milestone"
+        | join((if (len(ttl) > 0): [ttl, ""] else: []) + [_mm_cv_text(cv2), "", legend], "\n")
+      end
+end
+
+# ─── text graph layout (flowchart, state, class, er) ──────────────────────────
+# Boxes are placed in layers and joined with orthogonal lines. Each cell of a line keeps a
+# bit mask of the directions it connects (1 up, 2 right, 4 down, 8 left), so crossings and
+# junctions come out as ┼ ├ ┬ ... without special cases.
+
+def _mm_has(a, bit):
+  (floor(a / bit) - (2 * floor(a / (2 * bit)))) == 1
+end
+
+def _mm_mk_or(mk, x, y, bit):
+  map(range(0, len(mk) - 1, 1), fn(j):
+    if (j == y && x >= 0 && x < len(mk[j])):
+      map(range(0, len(mk[j]) - 1, 1), fn(i): if (i == x && not(_mm_has(mk[j][i], bit))): mk[j][i] + bit else: mk[j][i];)
+    else:
+      mk[j]
+  ;)
+end
+
+def _mm_sign(n): if (n > 0): 1 elif (n < 0): 0 - 1 else: 0;
+def _mm_opp(b): if (b == 1): 4 elif (b == 4): 1 elif (b == 2): 8 else: 2;
+
+# Draws the straight segment p -> q (horizontal or vertical) into the mask canvas.
+def _mm_mk_seg(mk, p, q):
+  let ux = _mm_sign(q[0] - p[0])
+  | let uy = _mm_sign(q[1] - p[1])
+  | let n  = abs(q[0] - p[0]) + abs(q[1] - p[1])
+  | let nxt = if (ux > 0): 2 elif (ux < 0): 8 elif (uy > 0): 4 else: 1
+  | if (n == 0 || (ux != 0 && uy != 0)):
+      mk
+    else:
+      fold(range(0, n, 1), mk, fn(m, k):
+        do
+          let x  = p[0] + (ux * k)
+          | let y  = p[1] + (uy * k)
+          | let m1 = if (k < n): _mm_mk_or(m, x, y, nxt) else: m
+          | if (k > 0): _mm_mk_or(m1, x, y, _mm_opp(nxt)) else: m1
+        end
+      ;)
+end
+
+def _mm_route_draw(mk, pts):
+  if (len(pts) < 2): mk else: fold(range(0, len(pts) - 2, 1), mk, fn(m, i): _mm_mk_seg(m, pts[i], pts[i + 1]);)
+end
+
+def _mm_cv_merge(cv, mk, lines):
+  map(range(0, len(cv) - 1, 1), fn(j):
+    map(range(0, len(cv[j]) - 1, 1), fn(i): if (cv[j][i] == " " && mk[j][i] > 0): lines[mk[j][i]] else: cv[j][i];)
+  ;)
+end
+
+def _mm_tnode_label(nd, ch):
+  let l = nd["label"]
+  | let sh = nd["shape"]
+  | if (sh == "circle"): "((" + l + "))"
+    elif (sh == "diamond"): "{" + l + "}"
+    elif (sh == "cylinder"): "[(" + l + ")]"
+    elif (sh == "subroutine"): "[[" + l + "]]"
+    elif (sh == "hexagon"): "{{" + l + "}}"
+    elif (sh == "start"): ch["start"]
+    elif (sh == "end"): ch["end"]
+    else: l
+end
+
+def _mm_tnode_size(nd, ch):
+  let lab = _mm_cols(_mm_tnode_label(nd, ch))
+  | let w = if (is_none(nd["rows"]) || is_empty(nd["rows"])): max(lab + 4, 5) else: max(max(lab, fold(nd["rows"], 0, fn(m, r): max(m, _mm_cols(r));)) + 4, 5)
+  | let odd = if (w == (floor(w / 2) * 2)): w + 1 else: w
+  | [odd, if (is_none(nd["rows"]) || is_empty(nd["rows"])): 3 else: len(nd["rows"]) + 4]
+end
+
+def _mm_tnode_rows(nd, w, ch):
+  let sh = nd["shape"]
+  | let round_ = sh == "round" || sh == "stadium" || sh == "state" || sh == "start" || sh == "end" || sh == "circle"
+  | let tl = if (round_): ch["rtl"] else: ch["tl"]
+  | let tr = if (round_): ch["rtr"] else: ch["tr"]
+  | let bl = if (round_): ch["rbl"] else: ch["bl"]
+  | let br = if (round_): ch["rbr"] else: ch["br"]
+  | let lab = _mm_tnode_label(nd, ch)
+  | let pad = w - 2 - _mm_cols(lab)
+  | let lp  = floor(pad / 2)
+  | let top = tl + repeat(ch["h"], w - 2) + tr
+  | let mid = ch["v"] + repeat(" ", lp) + lab + repeat(" ", pad - lp) + ch["v"]
+  | let bot = bl + repeat(ch["h"], w - 2) + br
+  | if (is_none(nd["rows"]) || is_empty(nd["rows"])):
+      [top, mid, bot]
+    else:
+      [top, mid, ch["tright"] + repeat(ch["h"], w - 2) + ch["tleft"]]
+        + map(nd["rows"], fn(r): ch["v"] + " " + _mm_pad_r(r, w - 4) + " " + ch["v"];)
+        + [bot]
+end
+
+# Edge ends: "arrow", "none", "x", "o", a single glyph, or "~text" (drawn beside the line).
+def _mm_dir_char(dx, dy):
+  if (dx > 0): ">" elif (dx < 0): "<" elif (dy > 0): "v" else: "^"
+end
+
+def _mm_put_mark(cv, mark, pt, dx, dy):
+  if (mark == "none" || is_none(mark)):
+    cv
+  elif (mark == "arrow"):
+    _mm_cv_put(cv, pt[0], pt[1], _mm_dir_char(dx, dy))
+  elif (starts_with(mark, "~")):
+    _mm_cv_put(cv, pt[0] + 1, pt[1], slice(mark, 1, len(mark)))
+  else:
+    _mm_cv_put(cv, pt[0], pt[1], mark)
+end
+
+def _mm_cells_free(cv, x, y, cols):
+  y >= 0 && y < len(cv) && x >= 0 && x + cols <= len(cv[y]) && all(range(x - 1, x + cols, 1), fn(i): i < 0 || i >= len(cv[y]) || cv[y][i] == " ";)
+end
+
+# Where to write an edge label: centered on the first horizontal segment that is long
+# enough (over the line itself), otherwise beside a vertical segment on free cells.
+def _mm_label_at(cv, pts, cols):
+  let segs = map(range(0, len(pts) - 2, 1), fn(i): [pts[i], pts[i + 1]];)
+  | let hs = filter(segs, fn(sg): sg[0][1] == sg[1][1] && (abs(sg[1][0] - sg[0][0]) - 1) >= cols;)
+  | if (!is_empty(hs)):
+      do
+        let sg = first(hs)
+        | let cap = abs(sg[1][0] - sg[0][0]) - 1
+        | [min(sg[0][0], sg[1][0]) + 1 + floor((cap - cols) / 2), sg[0][1]]
+      end
+    else:
+      do
+        let vs = filter(segs, fn(sg): sg[0][0] == sg[1][0];)
+        | let cands = fold(vs, [], fn(acc, sg):
+            do
+              let lo  = min(sg[0][1], sg[1][1])
+              | let hi  = max(sg[0][1], sg[1][1])
+              | let mid = floor((lo + hi) / 2)
+              | let ys  = [mid, mid - 1, mid + 1, mid - 2, mid + 2]
+              | acc + fold(ys, [], fn(a2, y): if (y < lo || y > hi): a2 else: a2 + [[sg[0][0] + 2, y], [sg[0][0] - 1 - cols, y]];)
+            end
+          ;)
+        | let free = filter(cands, fn(c): _mm_cells_free(cv, c[0], c[1], cols);)
+        | if (!is_empty(free)): first(free) elif (!is_empty(cands)): first(cands) else: None
+      end
+end
+
+# Removes the indentation shared by all non-empty lines.
+def _mm_dedent(text):
+  let ls  = split(text, "\n")
+  | let ind = fold(filter(ls, fn(l): len(l) > 0;), 1000, fn(m, l): min(m, len(capture(l, "^(?P<sp> *)")["sp"]));)
+  | if (ind == 0 || ind == 1000): text else: join(map(ls, fn(l): if (len(l) > 0): slice(l, ind, len(l)) else: l;), "\n")
+end
+
+# nds: [{id, label, shape, rows?}], egs: [{from, to, label, start, end}].
+def _mm_graph_text(nds, egs, dir, ch):
+  let horiz = dir == "LR" || dir == "RL"
+  | if (is_empty(nds)):
+      ""
+    else:
+      do
+        let rank   = _mm_ranks(nds, egs)
+        | let max_rk = fold(nds, 0, fn(m, nd): max(m, rank[nd["id"]]);)
+        | let nl     = max_rk + 1
+        | let layers = map(range(0, max_rk, 1), fn(r): filter(nds, fn(nd): rank[nd["id"]] == r;);)
+        | let sizes  = fold(nds, {}, fn(acc, nd): _mm_dset(acc, nd["id"], _mm_tnode_size(nd, ch));)
+        | let main_of  = fn(id): if (horiz): sizes[id][0] else: sizes[id][1];
+        | let cross_of = fn(id): if (horiz): sizes[id][1] else: sizes[id][0];
+        | let real   = filter(egs, fn(e): e["from"] != e["to"];)
+        | let planned = fold(real, {"cnt": {}, "lanes": 0, "specs": []}, fn(acc, e):
+            do
+              let sl   = rank[e["from"]]
+              | let tl   = rank[e["to"]]
+              | let kind = if (tl == sl + 1): "adj" elif (tl > sl + 1): "fwd" else: "back"
+              | let g2   = if (kind == "fwd"): tl - 1 else: tl
+              | let c1   = _mm_take(acc["cnt"], sl)
+              | let c2   = if (kind == "adj"): [c1[0], 0] else: _mm_take(c1[0], g2)
+              | let chan = kind != "adj"
+              | {
+                  "cnt": c2[0],
+                  "lanes": acc["lanes"] + (if (chan): 1 else: 0),
+                  "specs": acc["specs"] + [{"e": e, "kind": kind, "g1": sl, "o1": c1[1], "g2": g2, "o2": c2[1], "lane": if (chan): acc["lanes"] else: 0 - 1}]
+                }
+            end
+          ;)
+        | let specs  = planned["specs"]
+        | let used   = fn(g): if (is_none(planned["cnt"][to_string(g)])): 0 else: planned["cnt"][to_string(g)];
+        | let lbl_w  = fn(g): fold(specs, 0, fn(m, sp): if (sp["g1"] == g): max(m, _mm_cols(sp["e"]["label"])) else: m;);
+        | let base   = fn(g): if (horiz): lbl_w(g) + 1 else: 0;
+        | let gap    = fn(g): if (g == nl - 1): (if (used(g) == 0): 0 else: used(g) + 3 + base(g)) else: max(3, used(g) + 3) + base(g);
+        | let lm     = map(layers, fn(l): fold(l, 0, fn(m, nd): max(m, main_of(nd["id"])););)
+        | let a      = fold(range(0, max_rk, 1), [1], fn(acc, k): acc + [last(acc) + lm[k] + gap(k)];)
+        | let cg     = if (horiz): 1 else: 4
+        | let l_cross = map(layers, fn(l): fold(l, 0, fn(t, nd): t + cross_of(nd["id"]);) + (cg * max(len(l) - 1, 0));)
+        | let max_cross = fold(l_cross, 0, fn(m, c): max(m, c);)
+        | let place = fold(range(0, max_rk, 1), {}, fn(acc, k):
+            fold(layers[k], [acc, 1 + floor((max_cross - l_cross[k]) / 2)], fn(st, nd):
+              [_mm_dset(st[0], nd["id"], {"m": a[k], "c": st[1]}), st[1] + cross_of(nd["id"]) + cg]
+            ;)[0]
+          ;)
+        | let lane_c  = fn(j): 1 + max_cross + 2 + (2 * j);
+        | let c_total = if (planned["lanes"] == 0): max_cross + 2 else: lane_c(planned["lanes"] - 1) + 2
+        | let m_total = last(a) + 1
+        | let width   = if (horiz): m_total else: c_total
+        | let height  = if (horiz): c_total else: m_total
+        | let ab      = fn(m, c): if (horiz): [m, c] else: [c, m];
+        | let row_of  = fn(g, o): a[g] + lm[g] + base(g) + o;
+        | let cv0     = _mm_cv_make(width, height, fn(x, y): " ";)
+        | let cv1     = fold(nds, cv0, fn(cv, nd):
+            do
+              let p    = place[nd["id"]]
+              | let x    = if (horiz): p["m"] else: p["c"]
+              | let y    = if (horiz): p["c"] else: p["m"]
+              | let w    = sizes[nd["id"]][0]
+              | let rows = _mm_tnode_rows(nd, w, ch)
+              | fold(range(0, len(rows) - 1, 1), cv, fn(c2, i): _mm_cv_put(c2, x, y + i, rows[i]);)
+            end
+          ;)
+        | let routes = map(specs, fn(sp):
+            do
+              let e   = sp["e"]
+              | let ps  = place[e["from"]]
+              | let pt  = place[e["to"]]
+              | let m_end_s = ps["m"] + main_of(e["from"])
+              | let c_s = ps["c"] + floor(cross_of(e["from"]) / 2)
+              | let c_t = pt["c"] + floor(cross_of(e["to"]) / 2)
+              | let r1  = row_of(sp["g1"], sp["o1"])
+              | let r2  = row_of(sp["g2"], sp["o2"])
+              | let lane = lane_c(sp["lane"])
+              | let raw = if (sp["kind"] == "adj"):
+                  [ab(m_end_s, c_s), ab(r1, c_s), ab(r1, c_t), ab(pt["m"] - 1, c_t)]
+                elif (sp["kind"] == "fwd"):
+                  [ab(m_end_s, c_s), ab(r1, c_s), ab(r1, lane), ab(r2, lane), ab(r2, c_t), ab(pt["m"] - 1, c_t)]
+                else:
+                  do
+                    # Back edges enter beside the center so they do not run into the edges leaving the node.
+                    let c_b = c_t + (if (cross_of(e["to"]) >= 7): 2 else: 1)
+                    | [ab(m_end_s, c_s), ab(r1, c_s), ab(r1, lane), ab(r2, lane), ab(r2, c_b), ab(pt["m"] + main_of(e["to"]), c_b)]
+                  end
+              | {"e": e, "pts": fold(raw, [], fn(acc, p): if (!is_empty(acc) && last(acc) == p): acc else: acc + [p];)}
+            end
+          ;)
+        | let mk0 = _mm_cv_make(width, height, fn(x, y): 0;)
+        | let mk  = fold(routes, mk0, fn(m, r): _mm_route_draw(m, r["pts"]);)
+        | let cv2 = _mm_cv_merge(cv1, mk, ch["lines"])
+        | let cv3 = fold(routes, cv2, fn(cv, r):
+            do
+              let pts = r["pts"]
+              | let n   = len(pts)
+              | if (n < 2):
+                  cv
+                else:
+                  do
+                    let e   = r["e"]
+                    | let d1x = _mm_sign(pts[1][0] - pts[0][0])
+                    | let d1y = _mm_sign(pts[1][1] - pts[0][1])
+                    | let d2x = _mm_sign(pts[n - 1][0] - pts[n - 2][0])
+                    | let d2y = _mm_sign(pts[n - 1][1] - pts[n - 2][1])
+                    | _mm_put_mark(_mm_put_mark(cv, e["start"], pts[0], 0 - d1x, 0 - d1y), e["end"], pts[n - 1], d2x, d2y)
+                  end
+            end
+          ;)
+        | let cv4 = fold(routes, cv3, fn(cv, r):
+            do
+              let e  = r["e"]
+              | let at = if (len(e["label"]) > 0 && len(r["pts"]) > 1): _mm_label_at(cv, r["pts"], _mm_cols(e["label"])) else: None
+              | if (is_none(at)): cv else: _mm_cv_put(cv, at[0], at[1], e["label"])
+            end
+          ;)
+        | _mm_dedent(gsub(_mm_cv_text(cv4), "^\\n+", ""))
+      end
+end
+
+# Counts one more row (or column) used in gap g; returns [counts, ordinal].
+def _mm_take(cnt, g):
+  let k   = to_string(g)
+  | let cur = if (is_none(cnt[k])): 0 else: cnt[k]
+  | [_mm_dset(cnt, k, cur + 1), cur + 1]
+end
+
+# [start, end] edge ends for a flowchart link operator.
+def _mm_op_ends(op):
+  let o = if (is_none(op)): "-->" else: op
+  | if (o == "<-->"): ["arrow", "arrow"]
+    elif (o == "---" || o == "===" || o == "-.-"): ["none", "none"]
+    elif (o == "--x"): ["none", "x"]
+    elif (o == "--o"): ["none", "o"]
+    else: ["none", "arrow"]
+end
+
+# RL is drawn as LR and BT as TD in text.
+def _mm_text_dir(dir):
+  if (dir == "LR" || dir == "RL"): "LR" else: "TD"
+end
+
+def _mm_flow_text(d, ch):
+  let egs = map(d["edges"], fn(e):
+      do
+        let ends = _mm_op_ends(e["op"])
+        | {"from": e["from"], "to": e["to"], "label": e["label"], "start": ends[0], "end": ends[1]}
+      end
+    ;)
+  | _mm_graph_text(d["nodes"], egs, _mm_text_dir(d["direction"]), ch)
+end
+
+def _mm_state_text(d, ch):
+  let trs = d["transitions"]
+  | let has_start = any(trs, fn(t): t["from"] == "[*]";)
+  | let has_end   = any(trs, fn(t): t["to"] == "[*]";)
+  | let nds = (if (has_start): [{"id": "__start", "label": "", "shape": "start"}] else: [])
+      + map(d["states"], fn(s): {"id": s["id"], "label": s["label"], "shape": "state"};)
+      + (if (has_end): [{"id": "__end", "label": "", "shape": "end"}] else: [])
+  | let egs = map(trs, fn(t):
+      {
+        "from": if (t["from"] == "[*]"): "__start" else: t["from"],
+        "to": if (t["to"] == "[*]"): "__end" else: t["to"],
+        "label": t["label"], "start": "none", "end": "arrow"
+      }
+    ;)
+  | _mm_graph_text(nds, egs, _mm_text_dir(d["direction"]), ch)
+end
+
+# Classes only mentioned in a relation are drawn too.
+def _mm_class_text(d, ch):
+  let declared = map(d["classes"], fn(c): c["name"];)
+  | let rels   = d["relations"]
+  | let names  = fold(rels, declared, fn(acc, r):
+      let a = if (any(acc, fn(k): k == r["from"];)): acc else: acc + [r["from"]]
+      | if (any(a, fn(k): k == r["to"];)): a else: a + [r["to"]]
+    ;)
+  | let nds = map(names, fn(nm): {"id": nm, "label": nm, "shape": "rect"};)
+  | let egs = map(rels, fn(r):
+      do
+        let rel = r["rel"]
+        | let st = if (rel == "<|--" || rel == "|>--"): ch["tri"] elif (rel == "*--"): ch["dia"] elif (rel == "o--"): ch["odia"] else: "none"
+        | let en = if (rel == "--*"): ch["dia"] elif (rel == "--o"): ch["odia"] else: "none"
+        | {"from": r["from"], "to": r["to"], "label": r["label"], "start": st, "end": en}
+      end
+    ;)
+  | _mm_graph_text(nds, egs, "TD", ch)
+end
+
+def _mm_er_card_text(tok):
+  let c = _mm_er_cards()[tok]
+  | if (c == "one"): "~1" elif (c == "zero_one"): "~0..1" elif (c == "zero_many"): "~0..*" else: "~1..*"
+end
+
+def _mm_er_text(d, ch):
+  let nds = map(d["entities"], fn(e):
+      {"id": e["name"], "label": e["name"], "shape": "rect",
+       "rows": map(e["attributes"], fn(a): a["type"] + " " + a["name"] + (if (is_empty(a["keys"])): "" else: " " + join(a["keys"], ","));)}
+    ;)
+  | let egs = map(d["relations"], fn(r):
+      {"from": r["from"], "to": r["to"], "label": r["label"], "start": _mm_er_card_text(r["left"]), "end": _mm_er_card_text(r["right"])}
+    ;)
+  | _mm_graph_text(nds, egs, "TD", ch)
+end
+
+def _mm_render_text(d, ch):
+  let t = d["type"]
+  | if (t == "pie"):
+      _mm_pie_text(d, ch)
+    elif (t == "sequenceDiagram"):
+      _mm_seq_text(d, ch)
+    elif (t == "gantt"):
+      _mm_gantt_text(d, ch)
+    elif (t == "flowchart"):
+      _mm_flow_text(d, ch)
+    elif (t == "stateDiagram"):
+      _mm_state_text(d, ch)
+    elif (t == "classDiagram"):
+      _mm_class_text(d, ch)
+    elif (t == "erDiagram"):
+      _mm_er_text(d, ch)
+    else:
+      error("mermaid: cannot render diagram type as text: " + to_string(t))
 end
 
 # ─── theming ──────────────────────────────────────────────────────────────────
@@ -1765,17 +2349,39 @@ def mermaid_to_svg_with(diagram, opts):
   _mm_apply_theme(_mm_render(diagram), _mm_opt(opts, "theme", "light"))
 end
 
+# Renders a diagram as plain text (flowchart, sequence, class, state, er, pie and gantt).
+# Accepts either Mermaid text or a parsed diagram.
+def mermaid_to_text(diagram):
+  mermaid_to_text_with(diagram, {})
+end
+
+# Like mermaid_to_text with options:
+#   ascii  true to draw with + - | # instead of box drawing characters
+def mermaid_to_text_with(diagram, opts):
+  let d = if (is_string(diagram)): mermaid_parse(diagram) else: diagram
+  | let a = _mm_opt(opts, "ascii", false)
+  | _mm_render_text(d, _mm_tchars(a == true || a == "true"))
+end
+
 # Replaces every ```mermaid code block in a Markdown string with an inline SVG.
 # Blocks that fail to parse or use an unsupported diagram type are left untouched.
 def mermaid_render_markdown(markdown):
   mermaid_render_markdown_with(markdown, {})
 end
 
+# SVG for a block, or a fenced text block when opts["format"] is "text".
+def _mm_block_out(src, opts):
+  if (_mm_opt(opts, "format", "svg") == "text"):
+    "```text\n" + mermaid_to_text_with(src, opts) + "\n```"
+  else:
+    mermaid_to_svg_with(src, opts)
+end
+
 def mermaid_render_markdown_with(markdown, opts):
   let md = to_string(markdown)
   | fold(_mm_blocks(md), md, fn(acc, blk):
-      let svg = try: mermaid_to_svg_with(to_text(blk), opts) catch: None
-      | if (is_none(svg)): acc else: replace(acc, to_string(blk), svg)
+      let out = try: _mm_block_out(to_text(blk), opts) catch: None
+      | if (is_none(out)): acc else: replace(acc, to_string(blk), out)
     ;)
 end
 
@@ -1852,16 +2458,18 @@ def _mm_files(input, a, file):
 end
 
 # Entry point of the compiled command (see cli.mq). `a` holds the named arguments:
-#   mode      svg (default) | extract | parse | render | files
+#   mode      svg (default) | text | extract | parse | render | files
 #   nth       which diagram to use for svg / extract / parse (default 1)
 #   theme     light (default) | dark | auto
 #   out_dir, link_dir, name, write   options of `files`
 # `input` is a Markdown document or a single diagram.
 def mermaid_run(input, a, file):
   let mode = _mm_opt(a, "mode", "svg")
-  | let opts = {"theme": _mm_opt(a, "theme", "light")}
+  | let opts = {"theme": _mm_opt(a, "theme", "light"), "format": _mm_opt(a, "format", "svg"), "ascii": _mm_opt(a, "ascii", "false")}
   | if (mode == "svg"):
       mermaid_to_svg_with(_mm_pick(input, a), opts)
+    elif (mode == "text"):
+      mermaid_to_text_with(_mm_pick(input, a), opts)
     elif (mode == "extract"):
       if (is_none(a["nth"])): join(_mm_sources(input), "\n\n") else: _mm_pick(input, a)
     elif (mode == "parse"):
@@ -1871,5 +2479,5 @@ def mermaid_run(input, a, file):
     elif (mode == "files"):
       _mm_files(input, a, file)
     else:
-      error("mermaid: unknown mode: " + to_string(mode) + " (use svg, extract, parse, render or files)")
+      error("mermaid: unknown mode: " + to_string(mode) + " (use svg, text, extract, parse, render or files)")
 end
