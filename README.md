@@ -27,14 +27,14 @@ Render a diagram, or a diagram inside a Markdown document:
 
 ```sh
 mq -I raw mermaid.mqc examples/flowchart.mmd -o flowchart.svg
-mq -I raw mermaid.mqc --args nth 2 doc.md -o second.svg        # 2nd mermaid block of doc.md
+mq -I raw mermaid.mqc --arg nth 2 doc.md -o second.svg        # 2nd mermaid block of doc.md
 cat flow.mmd | mq -I raw mermaid.mqc > flow.svg                 # stdin works too
 ```
 
 Draw it as text in the terminal:
 
 ```sh
-mq -I raw mermaid.mqc --args mode text examples/sequence.mmd
+mq -I raw mermaid.mqc --arg mode text examples/sequence.mmd
 ```
 
 ```
@@ -53,14 +53,14 @@ mq -I raw mermaid.mqc --args mode text examples/sequence.mmd
 Pick a theme:
 
 ```sh
-mq -I raw mermaid.mqc --args theme dark flow.mmd -o flow-dark.svg
-mq -I raw mermaid.mqc --args theme auto flow.mmd -o flow.svg    # follows prefers-color-scheme
+mq -I raw mermaid.mqc --arg theme dark flow.mmd -o flow-dark.svg
+mq -I raw mermaid.mqc --arg theme auto flow.mmd -o flow.svg    # follows prefers-color-scheme
 ```
 
 Replace every Mermaid block of a document with an image link and write the `.svg` files next to it. GitHub hides inline `<svg>` but shows images.
 
 ```sh
-mq -I raw -W mermaid.mqc --args mode files --args write true docs/guide.md
+mq -I raw -W mermaid.mqc --arg mode files --arg write true docs/guide.md
 ```
 
 ```
@@ -68,21 +68,21 @@ docs/guide.md      a ```mermaid block becomes ![Mermaid diagram 1](guide-1.svg)
 docs/guide-1.svg   the rendered diagram
 ```
 
-`-W` lets the command write files. Without `--args write true` the new Markdown is printed instead of overwriting the file, so you can check it first.
+`-W` lets the command write files. Without `--arg write true` the new Markdown is printed instead of overwriting the file, so you can check it first.
 
 ## Command line
 
 | Argument | Description |
 |---|---|
-| `--args mode M` | `svg` (default), `text`, `extract`, `parse`, `render` or `files` |
-| `--args nth N` | Diagram to use for `svg`, `extract` and `parse` (1 based, default 1) |
-| `--args theme T` | `light` (default), `dark` or `auto` |
-| `--args ascii true` | `text` and `render` with `format text`: draw with plain ASCII (`+`, `-`, `#`) instead of box drawing characters |
-| `--args format text` | `render`: replace blocks with fenced text instead of inline SVG |
-| `--args out_dir D` | `files`: directory for the `.svg` files, which must exist. Default: the directory of the input |
-| `--args link_dir D` | `files`: directory used in the image links. Default: none, or `out_dir` when it is given |
-| `--args name N` | `files`: file name prefix (`N-1.svg`, `N-2.svg`, ...). Default: the input file name without extension |
-| `--args write true` | `files`: overwrite the input with the new Markdown (needs `-W`) |
+| `--arg mode M` | `svg` (default), `text`, `extract`, `parse`, `render` or `files` |
+| `--arg nth N` | Diagram to use for `svg`, `extract` and `parse` (1 based, default 1) |
+| `--arg theme T` | `light` (default), `dark` or `auto` |
+| `--arg ascii true` | `text` and `render` with `format text`: draw with plain ASCII (`+`, `-`, `#`) instead of box drawing characters |
+| `--arg format text` | `render`: replace blocks with fenced text instead of inline SVG |
+| `--arg out_dir D` | `files`: directory for the `.svg` files, which must exist. Default: the directory of the input |
+| `--arg link_dir D` | `files`: directory used in the image links. Default: none, or `out_dir` when it is given |
+| `--arg name N` | `files`: file name prefix (`N-1.svg`, `N-2.svg`, ...). Default: the input file name without extension |
+| `--arg write true` | `files`: overwrite the input with the new Markdown (needs `-W`) |
 
 The input is a Markdown document (its mermaid blocks are used) or a single diagram.
 
@@ -92,7 +92,7 @@ The input is a Markdown document (its mermaid blocks are used) or a single diagr
 | `text` | one diagram drawn as plain text |
 | `extract` | the source of every block, or of block `nth` |
 | `parse` | the parsed diagram. Add `-F json` for JSON |
-| `render` | the Markdown with every block replaced by an inline SVG, or by a `text` code block with `--args format text` |
+| `render` | the Markdown with every block replaced by an inline SVG, or by a `text` code block with `--arg format text` |
 | `files` | the Markdown with every block replaced by an image link. Writes the `.svg` files |
 
 A block that cannot be rendered (an unsupported diagram type or a syntax error) is left as it is. In `files` mode it keeps its number, so `guide-3.svg` is still the third block when the second one was skipped.
@@ -113,10 +113,10 @@ Anything else is parsed as `{ type, raw_lines }` and cannot be rendered.
 
 ### Text output
 
-`mode text` draws a diagram with box drawing characters, so it can be read in a terminal, a commit message or an LLM prompt. CJK characters count as two columns, so boxes stay aligned. Use `--args ascii true` for terminals and fonts without box drawing characters.
+`mode text` draws a diagram with box drawing characters, so it can be read in a terminal, a commit message or an LLM prompt. CJK characters count as two columns, so boxes stay aligned. Use `--arg ascii true` for terminals and fonts without box drawing characters.
 
 ```sh
-mq -I raw mermaid.mqc --args mode text examples/flowchart.mmd
+mq -I raw mermaid.mqc --arg mode text examples/flowchart.mmd
 ```
 
 ```
@@ -149,7 +149,7 @@ mq -I raw mermaid.mqc --args mode text examples/flowchart.mmd
 | Pie chart | one bar per slice with percentage and value |
 | Gantt chart | a date axis and one bar per task, with a different character for `done`, `active`, `crit` and `milestone` |
 
-Text output has a few limits: `RL` is drawn as `LR` and `BT` as `TD`, subgraphs are not drawn, and thick and dotted lines look like plain ones. An edge that does not go to the next layer runs in a lane beside the diagram. Diagrams that cannot be drawn as text (such as `journey`) raise an error. With `render` and `--args format text` they are left as they are.
+Text output has a few limits: `RL` is drawn as `LR` and `BT` as `TD`, subgraphs are not drawn, and thick and dotted lines look like plain ones. An edge that does not go to the next layer runs in a lane beside the diagram. Diagrams that cannot be drawn as text (such as `journey`) raise an error. With `render` and `--arg format text` they are left as they are.
 
 ### Theming
 
@@ -168,7 +168,7 @@ Colors are applied through CSS classes, and each color is a CSS variable with a 
 | `--mm-edge` | edges, arrowheads and message lines |
 | `--mm-life` | lifelines, grid lines and group borders |
 
-Variables only apply to an inlined SVG, not to one loaded through `<img>`. Use `--args theme auto` there.
+Variables only apply to an inlined SVG, not to one loaded through `<img>`. Use `--arg theme auto` there.
 
 ### Limitations
 
@@ -207,9 +207,9 @@ mq --allow-http-import -I raw 'import "github.com/harehare/mermaid.mq" | mermaid
 | `mermaid_link_markdown(md, path_fn, opts)` | Markdown with each renderable block replaced by `![Mermaid diagram N](path_fn(N))`. `N` counts all blocks from 1 |
 | `mermaid_parse(text)` | Structured data, see below |
 | `mermaid_stringify(diagram)` | Mermaid text for a parsed diagram |
-| `mermaid_run(input, args, file)` | Entry point of the command. `args` is the dict of `--args` |
+| `mermaid_run(input, args, file)` | Entry point of the command. `args` is the dict of `--arg` |
 
-`mermaid_svgs` and `mermaid_link_markdown` together do what `--args mode files` does, without writing files:
+`mermaid_svgs` and `mermaid_link_markdown` together do what `--arg mode files` does, without writing files:
 
 ```mq
 import "mermaid"
@@ -259,7 +259,7 @@ mq-test mermaid_tests.mq
 `examples/*.svg` are generated with the command. Regenerate them after changing a renderer:
 
 ```sh
-for f in examples/*.mmd; do mq -I raw mermaid.mqc --args theme auto "$f" > "${f%.mmd}.svg"; done
+for f in examples/*.mmd; do mq -I raw mermaid.mqc --arg theme auto "$f" > "${f%.mmd}.svg"; done
 ```
 
 ## Compatibility
