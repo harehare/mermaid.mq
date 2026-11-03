@@ -619,6 +619,79 @@ def _mm_parse_gantt(lines):
   | {"type": "gantt", "title": title, "sections": filter(secs, fn(s): s["name"] != "" || not(is_empty(s["tasks"]));)}
 end
 
+# ─── c4 diagram ───────────────────────────────────────────────────────────────
+# C4Context, C4Container, C4Component, C4Dynamic and C4Deployment share one syntax:
+# `Macro(arg, "arg", ...)` lines, with `{ ... }` after a boundary or a deployment node.
+
+def _mm_c4_variants():
+  {"context": "C4Context", "container": "C4Container", "component": "C4Component", "dynamic": "C4Dynamic", "deployment": "C4Deployment"}
+end
+
+def _mm_c4_unquote(a):
+  if (len(a) >= 2 && starts_with(a, "\"") && ends_with(a, "\"")): slice(a, 1, len(a) - 1) else: a
+end
+
+# Splits `a, "b, c", d` into ["a", "b, c", "d"]. Empty arguments are kept so that positions hold.
+# Named arguments such as `$tags="x"` are dropped.
+def _mm_c4_args(s):
+  let toks = regex_match(s, "\"[^\"]*\"|[^,\"]+|,")
+  | let st = fold(toks, {"done": [], "cur": ""}, fn(acc, t):
+      if (t == ","):
+        {"done": acc["done"] + [trim(acc["cur"])], "cur": ""}
+      else:
+        {"done": acc["done"], "cur": acc["cur"] + t}
+    ;)
+  | map(filter(st["done"] + [trim(st["cur"])], fn(a): not(starts_with(a, "$"));), fn(a): _mm_c4_unquote(a);)
+end
+
+def _mm_c4_arg(args, i): if (i < len(args)): args[i] else: "";
+
+# Containers, components and nodes have a technology between the label and the description.
+def _mm_c4_has_techn(macro): is_regex_match(macro, "^(Container|Component|Node|Deployment_Node)");
+
+def _mm_c4_macro(st, m):
+  let name   = m["name"]
+  | let a      = _mm_c4_args(m["args"])
+  | let arg    = fn(i): _mm_c4_arg(a, i);
+  | let parent = if (is_empty(st["stack"])): "" else: last(st["stack"])
+  | let opens  = m["open"] == "{"
+  | if (is_regex_match(name, "^(Rel|BiRel|Rel_[A-Za-z]+|RelIndex)$")):
+      do
+        let o = if (name == "RelIndex"): 1 else: 0
+        | _mm_dset(st, "rels", st["rels"] + [{"macro": name, "index": if (name == "RelIndex"): arg(0) else: "", "from": arg(o), "to": arg(o + 1), "label": arg(o + 2), "techn": arg(o + 3)}])
+      end
+    elif (opens || is_regex_match(name, "^(Boundary|Enterprise_Boundary|System_Boundary|Container_Boundary)$")):
+      do
+        let b   = {"macro": name, "id": arg(0), "label": arg(1), "techn": arg(2), "descr": arg(3), "parent": parent}
+        | let st2 = _mm_dset(st, "bds", st["bds"] + [b])
+        | if (opens): _mm_dset(st2, "stack", st["stack"] + [arg(0)]) else: st2
+      end
+    elif (is_regex_match(name, "^((Person|System|Container|Component)(Db|Queue)?(_Ext)?|Node|Node_L|Node_R|Deployment_Node)$")):
+      do
+        let tech = _mm_c4_has_techn(name)
+        | _mm_dset(st, "els", st["els"] + [{"macro": name, "id": arg(0), "label": arg(1), "techn": if (tech): arg(2) else: "", "descr": if (tech): arg(3) else: arg(2), "boundary": parent}])
+      end
+    else:
+      st
+end
+
+def _mm_c4_line(st, line):
+  let l = trim(line)
+  | if (l == "}"):
+      _mm_dset(st, "stack", if (is_empty(st["stack"])): st["stack"] else: slice(st["stack"], 0, len(st["stack"]) - 1))
+    elif (is_regex_match(l, "^title\\b")):
+      _mm_dset(st, "title", trim(gsub(l, "^title\\s*", "")))
+    elif (is_regex_match(l, "^[A-Za-z_]+\\s*\\(.*\\)\\s*\\{?$")):
+      _mm_c4_macro(st, capture(l, "^(?P<name>[A-Za-z_]+)\\s*\\((?P<args>.*)\\)\\s*(?P<open>\\{?)$"))
+    else:
+      st
+end
+
+def _mm_parse_c4(variant, lines):
+  let st = fold(lines, {"title": "", "els": [], "bds": [], "rels": [], "stack": []}, fn(s, line): _mm_c4_line(s, line);)
+  | {"type": "c4", "variant": variant, "title": st["title"], "elements": st["els"], "boundaries": st["bds"], "relations": st["rels"]}
+end
+
 # ─── serialization helpers ────────────────────────────────────────────────────
 
 def _mm_node_syntax(nd):
@@ -763,6 +836,48 @@ def _mm_gantt_stringify(d):
         ;)
     ;)
   | join(["gantt", "  dateFormat YYYY-MM-DD"] + (if (len(d["title"]) > 0): ["  title " + d["title"]] else: []) + lines, "\n")
+end
+
+# `Name(id, "text", ...)`. The first `plain` values are written as they are, the others are quoted.
+# Trailing empty values are left out.
+def _mm_c4_call(name, plain, vals):
+  let used = fold(range(0, len(vals) - 1, 1), 0, fn(m, i): if (len(vals[i]) > 0): i + 1 else: m;)
+  | let keep = max(used, plain)
+  | name + "(" + join(map(range(0, keep - 1, 1), fn(i): if (i < plain): vals[i] else: "\"" + vals[i] + "\"";), ", ") + ")"
+end
+
+def _mm_c4_el_line(e):
+  if (_mm_c4_has_techn(e["macro"])):
+    _mm_c4_call(e["macro"], 1, [e["id"], e["label"], e["techn"], e["descr"]])
+  else:
+    _mm_c4_call(e["macro"], 1, [e["id"], e["label"], e["descr"]])
+end
+
+def _mm_c4_rel_line(r):
+  if (r["macro"] == "RelIndex"):
+    _mm_c4_call(r["macro"], 3, [r["index"], r["from"], r["to"], r["label"], r["techn"]])
+  else:
+    _mm_c4_call(r["macro"], 2, [r["from"], r["to"], r["label"], r["techn"]])
+end
+
+# Elements and nested boundaries that belong to boundary `parent` ("" for the top level).
+def _mm_c4_scope_lines(d, parent, indent):
+  map(filter(d["elements"], fn(e): e["boundary"] == parent;), fn(e): indent + _mm_c4_el_line(e);)
+  + fold(filter(d["boundaries"], fn(b): b["parent"] == parent;), [], fn(acc, b):
+      acc
+      + [indent + _mm_c4_call(b["macro"], 1, [b["id"], b["label"], b["techn"], b["descr"]]) + " {"]
+      + _mm_c4_scope_lines(d, b["id"], indent + "  ")
+      + [indent + "}"]
+    ;)
+end
+
+def _mm_c4_stringify(d):
+  join(
+    [d["variant"]]
+    + (if (len(d["title"]) > 0): ["  title " + d["title"]] else: [])
+    + _mm_c4_scope_lines(d, "", "  ")
+    + map(d["relations"], fn(r): "  " + _mm_c4_rel_line(r);)
+    , "\n")
 end
 
 # ─── svg helpers ──────────────────────────────────────────────────────────────
@@ -1589,6 +1704,148 @@ def _mm_gantt_svg(d):
       end
 end
 
+# ─── c4 renderer ──────────────────────────────────────────────────────────────
+
+# Greedy word wrap. `measure` returns the width of a string. Every character outside ASCII
+# (CJK) may start a new line.
+def _mm_wrap(s, maxw, measure):
+  let toks = regex_match(to_string(s), "[\\x21-\\x7E]+|[^\\x00-\\x7F]")
+  | let st = fold(toks, {"lines": [], "cur": ""}, fn(acc, t):
+      do
+        let cur = acc["cur"]
+        | let nxt = if (cur == ""): t elif (is_regex_match(cur, "[\\x21-\\x7E]$") && is_regex_match(t, "^[\\x21-\\x7E]")): cur + " " + t else: cur + t
+        | if (cur != "" && measure(nxt) > maxw):
+            {"lines": acc["lines"] + [cur], "cur": t}
+          else:
+            {"lines": acc["lines"], "cur": nxt}
+      end
+    ;)
+  | if (st["cur"] == ""): st["lines"] else: st["lines"] + [st["cur"]]
+end
+
+# Shape and kind of an element macro (`Person`, `SystemDb_Ext`, `ContainerQueue`, `Node_L`, ...).
+def _mm_c4_info(macro):
+  let node  = is_regex_match(macro, "^(Node|Deployment_Node)")
+  | let ext   = is_regex_match(macro, "_Ext$")
+  | let db    = is_regex_match(macro, "Db(_Ext)?$")
+  | let queue = is_regex_match(macro, "Queue(_Ext)?$")
+  | let base  = if (node): "Node" else: gsub(macro, "(Db|Queue)?(_Ext)?$", "")
+  | {
+      "ext": ext, "db": db, "queue": queue, "person": base == "Person",
+      "kind": (if (ext): "External " else: "") + base + (if (db): " DB" elif (queue): " Queue" else: "")
+    }
+end
+
+# `[External System DB]` or `[Container: Spring Boot]`.
+def _mm_c4_type_line(e):
+  "[" + _mm_c4_info(e["macro"])["kind"] + (if (len(e["techn"]) > 0): ": " + e["techn"] else: "") + "]"
+end
+
+def _mm_c4_rel_label(r):
+  let base = r["label"] + (if (len(r["techn"]) > 0): " [" + r["techn"] + "]" else: "")
+  | trim(if (len(r["index"]) > 0): r["index"] + ": " + base else: base)
+end
+
+# Relations as edges. Direction hints (`Rel_U`, `Rel_Back`, ...) only change the layout of
+# Mermaid, so they are drawn like `Rel`. Relations to elements that are not declared are left out.
+def _mm_c4_edges(d):
+  let ids = map(d["elements"], fn(e): e["id"];)
+  | filter(
+      map(d["relations"], fn(r):
+        {"from": r["from"], "to": r["to"], "label": _mm_c4_rel_label(r), "both": r["macro"] == "BiRel"}
+      ;),
+      fn(e): any(ids, fn(i): i == e["from"];) && any(ids, fn(i): i == e["to"];);
+    )
+end
+
+# Text lines of an element box: [{ t: text, k: "l" (label) | "t" (type) | "d" (description) }].
+def _mm_c4_lines(e, wrap_w):
+  let m = fn(t): _mm_text_w(t);
+  | map(_mm_wrap(e["label"], wrap_w, m), fn(t): {"t": t, "k": "l"};)
+    + map(_mm_wrap(_mm_c4_type_line(e), wrap_w, m), fn(t): {"t": t, "k": "t"};)
+    + map(_mm_wrap(e["descr"], wrap_w, m), fn(t): {"t": t, "k": "d"};)
+end
+
+def _mm_c4_size(e, lines):
+  let info = _mm_c4_info(e["macro"])
+  | let tw = fold(lines, 0, fn(m, l): max(m, _mm_text_w(l["t"]));)
+  | [max(tw + 40, 150), max(60, 24 + (18 * len(lines)) + (if (info["person"]): 14 else: 0))]
+end
+
+def _mm_c4_node_svg(e, p, lines):
+  let info = _mm_c4_info(e["macro"])
+  | let x  = p["x"]
+  | let y  = p["y"]
+  | let w  = p["w"]
+  | let h  = p["h"]
+  | let x0 = x - (w / 2)
+  | let y0 = y - (h / 2)
+  | let cls = " class=\"mm-node" + (if (info["ext"]): " mm-ext" else: "") + "\""
+  | let body = if (info["db"]):
+      "<path d=\"M " + _mm_n(x0) + " " + _mm_n(y0 + 10) + " A " + _mm_n(w / 2) + " 10 0 0 1 " + _mm_n(x0 + w) + " " + _mm_n(y0 + 10) + " L " + _mm_n(x0 + w) + " " + _mm_n(y0 + h - 10) + " A " + _mm_n(w / 2) + " 10 0 0 1 " + _mm_n(x0) + " " + _mm_n(y0 + h - 10) + " Z M " + _mm_n(x0) + " " + _mm_n(y0 + 10) + " A " + _mm_n(w / 2) + " 10 0 0 0 " + _mm_n(x0 + w) + " " + _mm_n(y0 + 10) + "\"" + cls + "/>"
+    elif (info["queue"]):
+      "<path d=\"M " + _mm_n(x0 + 10) + " " + _mm_n(y0) + " L " + _mm_n(x0 + w - 10) + " " + _mm_n(y0) + " A 10 " + _mm_n(h / 2) + " 0 0 1 " + _mm_n(x0 + w - 10) + " " + _mm_n(y0 + h) + " L " + _mm_n(x0 + 10) + " " + _mm_n(y0 + h) + " A 10 " + _mm_n(h / 2) + " 0 0 1 " + _mm_n(x0 + 10) + " " + _mm_n(y0) + " Z M " + _mm_n(x0 + w - 10) + " " + _mm_n(y0) + " A 10 " + _mm_n(h / 2) + " 0 0 0 " + _mm_n(x0 + w - 10) + " " + _mm_n(y0 + h) + "\"" + cls + "/>"
+    else:
+      "<rect x=\"" + _mm_n(x0) + "\" y=\"" + _mm_n(y0) + "\" width=\"" + _mm_n(w) + "\" height=\"" + _mm_n(h) + "\" rx=\"" + (if (info["person"]): "14" else: "4") + "\"" + cls + "/>"
+  | let head = if (info["person"]): "<circle cx=\"" + _mm_n(x) + "\" cy=\"" + _mm_n(y0) + "\" r=\"10\"" + cls + "/>" else: ""
+  | let shift = if (info["person"]): 7 elif (info["db"]): 5 else: 0
+  | let top   = y - (18 * len(lines) / 2) + 9 + shift
+  | let texts = map(range(0, len(lines) - 1, 1), fn(i):
+      do
+        let k = lines[i]["k"]
+        | _mm_text(x, top + (18 * i), lines[i]["t"], if (k == "l"): " font-weight=\"bold\"" elif (k == "t"): " font-size=\"12\" font-style=\"italic\"" else: " font-size=\"13\"")
+      end
+    ;)
+  | _mm_join([body, head] + texts)
+end
+
+def _mm_c4_svg(d):
+  let els = d["elements"]
+  | let bds = d["boundaries"]
+  | if (is_empty(els)):
+      error("mermaid: c4 diagram has no elements")
+    else:
+      do
+        let order = fold(bds, {}, fn(acc, b): _mm_dset(acc, b["id"], len(keys(acc)));)
+        | let lines = fold(els, {}, fn(acc, e): _mm_dset(acc, e["id"], _mm_c4_lines(e, 220));)
+        | let nds = fold(els, [], fn(acc, e):
+            do
+              # Elements of a boundary stay together; the ones outside it come last, beside the box.
+              let gi = if (e["boundary"] == "" || is_none(order[e["boundary"]])): len(bds) else: order[e["boundary"]]
+              | acc + [{"id": e["id"], "label": e["label"], "shape": "rect", "size": _mm_c4_size(e, lines[e["id"]]), "key": (gi * 10000) + len(acc)}]
+            end
+          ;)
+        | let sgs = map(bds, fn(b):
+            {
+              "id": b["id"],
+              "title": b["label"] + (if (len(b["techn"]) > 0): " [" + b["techn"] + "]" else: ""),
+              "nodes": map(filter(els, fn(e): e["boundary"] == b["id"];), fn(e): e["id"];),
+              "parent": b["parent"]
+            }
+          ;)
+        | let edges = _mm_c4_edges(d)
+        | let tops  = fold(sgs, 0, fn(m, g): max(m, _mm_sg_height(sgs, g["id"]));)
+        | let wide  = fold(edges, 0, fn(m, e): max(m, _mm_text_w(e["label"]));)
+        | let extra = (if (is_empty(sgs)): 0 else: 30 + (14 * tops)) + min(40, floor(max(wide - 80, 0) / 5))
+        | let lay   = _mm_flow_layout(nds, edges, "TD", extra)
+        | let pos   = lay["pos"]
+        | let drawn = map(edges, fn(e):
+            _mm_edge_svg(e, edges, pos, (if (e["both"]): " marker-start=\"url(#mm-arrow)\"" else: "") + " marker-end=\"url(#mm-arrow)\"")
+          ;)
+        | let groups = sort_by(sgs, fn(g): 0 - _mm_sg_height(sgs, g["id"]);)
+        | let title  = if (len(d["title"]) > 0): [_mm_text_start(16, 20, d["title"], " font-weight=\"bold\"")] else: []
+        | _mm_join(
+            [_mm_svg_open(lay["width"], lay["height"]), _mm_marker_defs()]
+            + map(groups, fn(g): _mm_sg_rect(g, sgs, pos);)
+            + map(drawn, fn(r): r[0];)
+            + map(els, fn(e): _mm_c4_node_svg(e, pos[e["id"]], lines[e["id"]]);)
+            + map(drawn, fn(r): r[1];)
+            + title
+            + ["</svg>"]
+          )
+      end
+end
+
 # ─── text renderer ────────────────────────────────────────────────────────────
 # Draws diagrams as plain text, for terminals, docs and anything that cannot show images.
 
@@ -2167,8 +2424,31 @@ def _mm_render_text(d, ch):
       _mm_class_text(d, ch)
     elif (t == "erDiagram"):
       _mm_er_text(d, ch)
+    elif (t == "c4"):
+      _mm_c4_text(d, ch)
     else:
       error("mermaid: cannot render diagram type as text: " + to_string(t))
+end
+
+# ─── c4 text ──────────────────────────────────────────────────────────────────
+
+# Boundaries are not drawn. Persons have rounded corners and databases are shown as `[(Name)]`.
+def _mm_c4_text(d, ch):
+  let nds = map(d["elements"], fn(e):
+      do
+        let info = _mm_c4_info(e["macro"])
+        | {
+            "id": e["id"], "label": e["label"],
+            "shape": if (info["db"]): "cylinder" elif (info["person"]): "round" else: "rect",
+            "rows": [_mm_c4_type_line(e)] + _mm_wrap(e["descr"], 30, fn(t): _mm_cols(t);)
+          }
+      end
+    ;)
+  | let egs = map(_mm_c4_edges(d), fn(e):
+      {"from": e["from"], "to": e["to"], "label": e["label"], "start": if (e["both"]): "arrow" else: "none", "end": "arrow"}
+    ;)
+  | let body = _mm_graph_text(nds, egs, "TD", ch)
+  | if (len(d["title"]) > 0): d["title"] + "\n\n" + body else: body
 end
 
 # ─── theming ──────────────────────────────────────────────────────────────────
@@ -2202,6 +2482,7 @@ def _mm_theme_rules(sel, c):
     sel + " .mm-mhollow{" + _mm_decl("fill", "bg", c["bg"]) + _mm_decl("stroke", "edge", c["edge"]) + "}",
     sel + " .mm-mline{fill:none;" + _mm_decl("stroke", "edge", c["edge"]) + "}",
     sel + " .mm-solid{" + _mm_decl("fill", "edge", c["edge"]) + _mm_decl("stroke", "edge", c["edge"]) + "}",
+    sel + " .mm-ext{" + _mm_decl("fill", "life", c["life"]) + "fill-opacity:.3}",
     sel + " .mm-band{" + _mm_decl("fill", "node", c["node"]) + "fill-opacity:.45}",
     sel + " .mm-group{" + _mm_decl("fill", "node", c["node"]) + _mm_decl("stroke", "life", c["life"]) + "fill-opacity:.3;stroke-width:1}"
   ], "")
@@ -2244,6 +2525,8 @@ def _mm_render(diagram):
       _mm_er_svg(d)
     elif (t == "gantt"):
       _mm_gantt_svg(d)
+    elif (t == "c4"):
+      _mm_c4_svg(d)
     else:
       error("mermaid: cannot render diagram type: " + to_string(t))
 end
@@ -2264,6 +2547,7 @@ end
 #   stateDiagram       →  stateDiagram-v2\n  …transitions…
 #   erDiagram          →  erDiagram\n  …relations…\n  entity blocks
 #   gantt              →  gantt\n  section …\n  task : tags, id, start, end
+#   c4                 →  C4Context\n  title …\n  elements and boundaries\n  relations
 #   unknown            →  {type}\n  …raw_lines…
 def mermaid_stringify(diagram):
   let t = diagram["type"]
@@ -2281,6 +2565,8 @@ def mermaid_stringify(diagram):
       _mm_er_stringify(diagram)
     elif (t == "gantt"):
       _mm_gantt_stringify(diagram)
+    elif (t == "c4"):
+      _mm_c4_stringify(diagram)
     else:
       do
         let raw_lines = diagram["raw_lines"]
@@ -2298,6 +2584,8 @@ end
 #   stateDiagram       → { type, direction, states, transitions }
 #   erDiagram          → { type, entities, relations }
 #   gantt              → { type, title, sections }
+#   C4Context, C4Container, C4Component, C4Dynamic, C4Deployment
+#                      → { type: "c4", variant, title, elements, boundaries, relations }
 #
 # Unknown diagram types return { type, raw_lines }.
 def mermaid_parse(input):
@@ -2322,6 +2610,8 @@ def mermaid_parse(input):
             _mm_parse_er(body)
           elif (is_regex_match(header, "^gantt")):
             _mm_parse_gantt(body)
+          elif (is_regex_match(header, "^c4(context|container|component|dynamic|deployment)\\b")):
+            _mm_parse_c4(_mm_c4_variants()[capture(header, "^c4(?P<v>[a-z]+)")["v"]], body)
           else:
             {"type": header, "raw_lines": body}
       end
@@ -2337,7 +2627,7 @@ end
 # Accepts either Mermaid text or a parsed diagram (as returned by mermaid_parse).
 #
 # Supported diagram types: flowchart / graph, sequenceDiagram, pie, classDiagram,
-# stateDiagram, erDiagram and gantt.
+# stateDiagram, erDiagram, gantt and C4 diagrams.
 # Any other type raises an error.
 def mermaid_to_svg(diagram):
   mermaid_to_svg_with(diagram, {})
@@ -2349,7 +2639,7 @@ def mermaid_to_svg_with(diagram, opts):
   _mm_apply_theme(_mm_render(diagram), _mm_opt(opts, "theme", "light"))
 end
 
-# Renders a diagram as plain text (flowchart, sequence, class, state, er, pie and gantt).
+# Renders a diagram as plain text (flowchart, sequence, class, state, er, pie, gantt and C4).
 # Accepts either Mermaid text or a parsed diagram.
 def mermaid_to_text(diagram):
   mermaid_to_text_with(diagram, {})

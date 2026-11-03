@@ -13,6 +13,7 @@ It can also draw diagrams as plain text for the terminal, parse them into data a
   <img src="examples/class.svg" alt="class diagram" height="240">
   <img src="examples/pie.svg" alt="pie chart" height="240">
   <img src="examples/gantt.svg" alt="gantt chart" height="240">
+  <img src="examples/c4.svg" alt="c4 diagram" height="240">
 </p>
 
 ## Quick start
@@ -108,6 +109,7 @@ A block that cannot be rendered (an unsupported diagram type or a syntax error) 
 | ER diagram | Relations with all cardinalities, solid and dashed lines, labels. Entity blocks with attributes, `PK` `FK` `UK` keys and comments |
 | Gantt chart | `title`, `section`, tasks with `done` `active` `crit` `milestone` tags, an id, a start date or `after id`, and an end date or a duration (`10d`, `2w`). Dates are `YYYY-MM-DD`. Other settings are ignored |
 | Pie chart | Title and labeled slices |
+| C4 diagram (`C4Context`, `C4Container`, `C4Component`, `C4Dynamic`, `C4Deployment`) | `title`. Elements `Person` `System` `Container` `Component` with `Db`, `Queue` and `_Ext` variants, and `Node` `Node_L` `Node_R` `Deployment_Node`. Boundaries `Boundary` `Enterprise_Boundary` `System_Boundary` `Container_Boundary` and nodes with `{ ... }`, nested. Relations `Rel` `BiRel` `Rel_U` `Rel_D` `Rel_L` `Rel_R` `Rel_Back` `RelIndex`. `Update*` and `LAYOUT_*` lines and `$tags`-style arguments are ignored |
 
 Anything else is parsed as `{ type, raw_lines }` and cannot be rendered.
 
@@ -147,6 +149,7 @@ mq -I raw mermaid.mqc --arg mode text examples/flowchart.mmd
 | ER diagram | entity boxes with their attributes, and cardinalities (`1`, `0..1`, `0..*`, `1..*`) at both ends of a relation |
 | Sequence diagram | participant boxes, lifelines, solid and dashed arrows, `>` and `x` heads, messages to self |
 | Pie chart | one bar per slice with percentage and value |
+| C4 diagram | boxes with the element type (`[Person]`, `[Container: Go]`) and description. Persons have rounded corners and databases are shown as `[(Name)]`. Boundaries are not drawn |
 | Gantt chart | a date axis and one bar per task, with a different character for `done`, `active`, `crit` and `milestone` |
 
 Text output has a few limits: `RL` is drawn as `LR` and `BT` as `TD`, subgraphs are not drawn, and thick and dotted lines look like plain ones. An edge that does not go to the next layer runs in a lane beside the diagram. Diagrams that cannot be drawn as text (such as `journey`) raise an error. With `render` and `--arg format text` they are left as they are.
@@ -166,7 +169,7 @@ Colors are applied through CSS classes, and each color is a CSS variable with a 
 | `--mm-node` | fill of nodes, classes, entities and participants |
 | `--mm-stroke` | border of those shapes |
 | `--mm-edge` | edges, arrowheads and message lines |
-| `--mm-life` | lifelines, grid lines and group borders |
+| `--mm-life` | lifelines, grid lines, group borders and the fill of external C4 elements |
 
 Variables only apply to an inlined SVG, not to one loaded through `<img>`. Use `--arg theme auto` there.
 
@@ -174,6 +177,7 @@ Variables only apply to an inlined SVG, not to one loaded through `<img>`. Use `
 
 - Edges are straight lines. An edge that would cross another node is drawn as a curve around it.
 - Subgraph boxes are drawn around their members. The layout does not keep other nodes out of a box, so an unrelated node can overlap it.
+- C4 diagrams are laid out in layers from top to bottom. `Rel_U`, `Rel_L` and the other direction hints, `UpdateLayoutConfig` and styling calls are ignored, and relations to undeclared elements are not drawn.
 - `style`, `classDef`, `linkStyle` and `click` lines are ignored. Edges to a subgraph are not supported.
 - Gantt only reads `YYYY-MM-DD` dates and durations in days or weeks.
 - `render` and `files` match blocks fenced with three backticks.
@@ -227,6 +231,7 @@ import "mermaid"
 | classDiagram | `type`, `classes`, `relations` (`from` `to` `rel` `label`) |
 | stateDiagram | `type`, `direction`, `states` (`id` `label`), `transitions` (`from` `to` `label`) |
 | erDiagram | `type`, `entities` (`name` `attributes`), `relations` (`from` `to` `left` `line` `right` `label`) |
+| c4 | `type`, `variant` (`C4Context`, ...), `title`, `elements` (`macro` `id` `label` `techn` `descr` `boundary`), `boundaries` (`macro` `id` `label` `techn` `descr` `parent`), `relations` (`macro` `index` `from` `to` `label` `techn`) |
 | gantt | `type`, `title`, `sections` (`name` `tasks`). A task has `name` `id` `tags` `start` `end`, and `after` and durations are already resolved to dates |
 | pie | `type`, `title`, `slices` (`label` `value`) |
 | other | `type`, `raw_lines` |
