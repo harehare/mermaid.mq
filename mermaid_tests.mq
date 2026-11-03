@@ -1563,3 +1563,136 @@ def test_class_relation_with_leading_o_marker():
   | assert_eq(r["rel"], "o--")
   | assert_eq(r["from"], "C")
 end
+
+# -- c4 --
+
+def _c4():
+  "C4Context\n  title Banking\n  Person(c, \"Customer\", \"Uses, a lot\")\n  Enterprise_Boundary(b, \"Bank\") {\n    System(s, \"Banking System\", \"Pays\")\n    SystemDb_Ext(m, \"Mainframe\", \"Core data\", $tags=\"x\")\n  }\n  Rel(c, s, \"Uses\")\n  BiRel(s, m, \"Syncs\", \"HTTPS\")"
+end
+
+def test_c4_type_variant_and_title():
+  let d = mermaid_parse(_c4())
+  | assert_eq(d["type"], "c4")
+  | assert_eq(d["variant"], "C4Context")
+  | assert_eq(d["title"], "Banking")
+end
+
+def test_c4_variants():
+  assert_eq(mermaid_parse("C4Container\n  Person(a, \"A\")")["variant"], "C4Container")
+  | assert_eq(mermaid_parse("C4Component\n  Person(a, \"A\")")["variant"], "C4Component")
+  | assert_eq(mermaid_parse("C4Dynamic\n  Person(a, \"A\")")["variant"], "C4Dynamic")
+  | assert_eq(mermaid_parse("C4Deployment\n  Person(a, \"A\")")["variant"], "C4Deployment")
+end
+
+def test_c4_quoted_argument_keeps_comma():
+  let e = first(mermaid_parse(_c4())["elements"])
+  | assert_eq(e["macro"], "Person")
+  | assert_eq(e["label"], "Customer")
+  | assert_eq(e["descr"], "Uses, a lot")
+end
+
+def test_c4_boundary_membership():
+  let d = mermaid_parse(_c4())
+  | assert_eq(len(d["boundaries"]), 1)
+  | assert_eq(first(d["boundaries"])["label"], "Bank")
+  | assert_eq(d["elements"][0]["boundary"], "")
+  | assert_eq(d["elements"][1]["boundary"], "b")
+  | assert_eq(d["elements"][2]["boundary"], "b")
+end
+
+def test_c4_named_arguments_are_dropped():
+  let e = last(mermaid_parse(_c4())["elements"])
+  | assert_eq(e["macro"], "SystemDb_Ext")
+  | assert_eq(e["descr"], "Core data")
+end
+
+def test_c4_container_has_technology():
+  let e = first(mermaid_parse("C4Container\n  Container(w, \"Web\", \"React\", \"SPA\")")["elements"])
+  | assert_eq(e["techn"], "React")
+  | assert_eq(e["descr"], "SPA")
+end
+
+def test_c4_relations():
+  let rs = mermaid_parse(_c4())["relations"]
+  | assert_eq(len(rs), 2)
+  | assert_eq(rs[0]["from"], "c")
+  | assert_eq(rs[0]["to"], "s")
+  | assert_eq(rs[1]["macro"], "BiRel")
+  | assert_eq(rs[1]["techn"], "HTTPS")
+end
+
+def test_c4_rel_index():
+  let r = first(mermaid_parse("C4Dynamic\n  RelIndex(1, a, b, \"Opens\")")["relations"])
+  | assert_eq(r["index"], "1")
+  | assert_eq(r["from"], "a")
+  | assert_eq(r["label"], "Opens")
+end
+
+def test_c4_nested_deployment_nodes():
+  let d = mermaid_parse("C4Deployment\n  Deployment_Node(a, \"A\", \"Linux\") {\n    Deployment_Node(b, \"B\") {\n      Container(c, \"C\", \"Go\")\n    }\n  }")
+  | assert_eq(len(d["boundaries"]), 2)
+  | assert_eq(d["boundaries"][1]["parent"], "a")
+  | assert_eq(first(d["elements"])["boundary"], "b")
+end
+
+def test_c4_ignores_style_calls():
+  let d = mermaid_parse("C4Context\n  Person(a, \"A\")\n  UpdateElementStyle(a, $bgColor=\"red\")\n  UpdateLayoutConfig($c4ShapeInRow=\"3\")")
+  | assert_eq(len(d["elements"]), 1)
+end
+
+def test_c4_stringify_round_trip():
+  let once = mermaid_stringify(mermaid_parse(_c4()))
+  | assert_eq(mermaid_stringify(mermaid_parse(once)), once)
+  | assert_eq(mermaid_parse(once)["elements"], mermaid_parse(_c4())["elements"])
+  | assert_eq(mermaid_parse(once)["relations"], mermaid_parse(_c4())["relations"])
+end
+
+def test_c4_stringify_text():
+  let out = mermaid_stringify(mermaid_parse(_c4()))
+  | assert_contains(out, "C4Context")
+  | assert_contains(out, "Enterprise_Boundary(b, \"Bank\") {")
+  | assert_contains(out, "BiRel(s, m, \"Syncs\", \"HTTPS\")")
+end
+
+def test_c4_svg():
+  let svg = mermaid_to_svg(_c4())
+  | assert_contains(svg, "<svg")
+  | assert_contains(svg, "Customer")
+  | assert_contains(svg, "[External System DB]")
+  | assert_contains(svg, "Syncs [HTTPS]")
+  | assert_contains(svg, "mm-ext")
+end
+
+def test_c4_svg_bidirectional_has_start_marker():
+  assert_contains(mermaid_to_svg(_c4()), "marker-start=\"url(#mm-arrow)\"")
+end
+
+def test_c4_svg_skips_relation_to_unknown_element():
+  assert_contains(mermaid_to_svg("C4Context\n  Person(a, \"A\")\n  Person(b, \"B\")\n  Rel(a, zzz, \"x\")\n  Rel(a, b, \"y\")"), "y")
+end
+
+def test_c4_svg_without_elements_fails():
+  assert_eq(try: mermaid_to_svg("C4Context\n  title Empty") catch: "error", "error")
+end
+
+def test_c4_text():
+  let out = mermaid_to_text(_c4())
+  | assert_contains(out, "Banking")
+  | assert_contains(out, "[Person]")
+  | assert_contains(out, "[(Mainframe)]")
+  | assert_contains(out, "Uses")
+end
+
+def test_c4_text_ascii():
+  assert_contains(mermaid_to_text_with(_c4(), {"ascii": true}), "| [Person]")
+end
+
+def test_c4_run_modes():
+  assert_contains(mermaid_run(_c4(), {"mode": "svg"}, None), "<svg")
+  | assert_contains(mermaid_run(_c4(), {"mode": "text"}, None), "[System]")
+end
+
+def test_c4_render_markdown():
+  let out = mermaid_render_markdown("```mermaid\n" + _c4() + "\n```")
+  | assert_contains(out, "<svg")
+end
