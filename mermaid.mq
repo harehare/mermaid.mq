@@ -1850,8 +1850,8 @@ end
 # Draws diagrams as plain text, for terminals, docs and anything that cannot show images.
 
 def _mm_chars(s):
-  let parts = split(to_string(s), "")
-  | if (len(parts) < 3): [] else: slice(parts, 1, len(parts) - 1)
+  # Older mq returned empty strings at both ends of split(s, ""); newer mq does not.
+  filter(split(to_string(s), ""), fn(c): c != "";)
 end
 
 def _mm_is_wide(c):
